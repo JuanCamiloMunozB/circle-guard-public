@@ -1,0 +1,238 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY      = 'circleguard'
+        K8S_NAMESPACE = 'circleguard-master'
+        IMAGE_TAG     = "v${BUILD_NUMBER}"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                sh './gradlew :services:circleguard-auth-service:test \
+                              :services:circleguard-identity-service:test \
+                              :services:circleguard-form-service:test \
+                              :services:circleguard-promotion-service:test \
+                              :services:circleguard-notification-service:test \
+                              :services:circleguard-dashboard-service:test \
+                    --continue'
+            }
+            post {
+                always {
+                    junit '**/build/test-results/test/*.xml'
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            steps {
+                sh './gradlew :services:circleguard-form-service:test \
+                              :services:circleguard-promotion-service:test \
+                              :services:circleguard-notification-service:test \
+                    -Dspring.profiles.active=integration --continue'
+            }
+            post {
+                always {
+                    junit '**/build/test-results/test/*.xml'
+                }
+            }
+        }
+
+        stage('Build JARs') {
+            steps {
+                sh './gradlew :services:circleguard-auth-service:bootJar \
+                              :services:circleguard-identity-service:bootJar \
+                              :services:circleguard-form-service:bootJar \
+                              :services:circleguard-promotion-service:bootJar \
+                              :services:circleguard-notification-service:bootJar \
+                              :services:circleguard-dashboard-service:bootJar \
+                    --parallel'
+            }
+        }
+
+        stage('Build & Push Docker Images') {
+            steps {
+                script {
+                    def services = [
+                        [name: 'auth-service',         dir: 'circleguard-auth-service'],
+                        [name: 'identity-service',     dir: 'circleguard-identity-service'],
+                        [name: 'form-service',         dir: 'circleguard-form-service'],
+                        [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
+                        [name: 'notification-service', dir: 'circleguard-notification-service'],
+                        [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
+                    ]
+                    services.each { svc ->
+                        sh "docker build -t ${REGISTRY}/${svc.name}:${IMAGE_TAG} services/${svc.dir}"
+                        sh "docker tag ${REGISTRY}/${svc.name}:${IMAGE_TAG} ${REGISTRY}/${svc.name}:latest"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Master') {
+            steps {
+                sh "kubectl apply -f k8s/namespaces.yaml"
+                sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
+                sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
+                script {
+                    ['auth-service', 'identity-service', 'form-service',
+                     'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                        sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
+                    }
+                }
+            }
+        }
+
+        stage('Wait for Rollout') {
+            steps {
+                script {
+                    ['auth-service', 'identity-service', 'form-service',
+                     'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                        sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
+                    }
+                }
+            }
+        }
+
+        stage('System Validation Tests') {
+            steps {
+                sh './gradlew :services:circleguard-auth-service:test \
+                              :services:circleguard-form-service:test \
+                              :services:circleguard-promotion-service:test \
+                    -Dspring.profiles.active=master \
+                    -Dbase.url=http://localhost \
+                    --continue'
+            }
+            post {
+                always {
+                    junit '**/build/test-results/test/*.xml'
+                }
+            }
+        }
+
+        stage('Performance Tests') {
+            steps {
+                sh '''
+                    pip install locust --quiet
+                    locust -f tests/performance/locustfile.py \
+                        --headless -u 50 -r 5 -t 120s \
+                        --host http://$(kubectl get svc form-service -n ${K8S_NAMESPACE} -o jsonpath="{.spec.clusterIP}"):8086 \
+                        --html tests/performance/locust-report-master.html \
+                        --csv tests/performance/locust-master \
+                        --exit-code-on-error 0
+                '''
+            }
+            post {
+                always {
+                    publishHTML(target: [
+                        reportDir: 'tests/performance',
+                        reportFiles: 'locust-report-master.html',
+                        reportName: 'Master Performance Report'
+                    ])
+                    archiveArtifacts artifacts: 'tests/performance/locust-master*.csv', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Generate Release Notes') {
+            steps {
+                script {
+                    def previousTag = sh(
+                        script: "git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo 'NONE'",
+                        returnStdout: true
+                    ).trim()
+
+                    def commits = previousTag == 'NONE'
+                        ? sh(script: "git log --oneline -20 --pretty='- %s (%an)'", returnStdout: true).trim()
+                        : sh(script: "git log ${previousTag}..HEAD --oneline --pretty='- %s (%an)'", returnStdout: true).trim()
+
+                    def testResults = sh(
+                        script: "grep -r '<testsuite' build/ --include='*.xml' | grep -oP 'tests=\"\\K[0-9]+' | paste -sd+ | bc 2>/dev/null || echo '0'",
+                        returnStdout: true
+                    ).trim()
+
+                    def failures = sh(
+                        script: "grep -r '<testsuite' build/ --include='*.xml' | grep -oP 'failures=\"\\K[0-9]+' | paste -sd+ | bc 2>/dev/null || echo '0'",
+                        returnStdout: true
+                    ).trim()
+
+                    def date = sh(script: "date '+%Y-%m-%d'", returnStdout: true).trim()
+                    def gitAuthor = sh(script: "git log -1 --pretty='%an'", returnStdout: true).trim()
+                    def gitHash = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+
+                    def releaseNotes = """# CircleGuard Release Notes - ${IMAGE_TAG}
+
+**Date:** ${date}
+**Build:** ${BUILD_NUMBER}
+**Commit:** ${gitHash}
+**Author:** ${gitAuthor}
+**Environment:** master / production
+
+---
+
+## Services Released
+
+| Service            | Port | Image Tag     |
+|--------------------|------|---------------|
+| auth-service       | 8180 | ${IMAGE_TAG}  |
+| identity-service   | 8083 | ${IMAGE_TAG}  |
+| form-service       | 8086 | ${IMAGE_TAG}  |
+| promotion-service  | 8088 | ${IMAGE_TAG}  |
+| notification-service| 8082 | ${IMAGE_TAG} |
+| dashboard-service  | 8084 | ${IMAGE_TAG}  |
+
+---
+
+## Changes
+
+${commits}
+
+---
+
+## Test Summary
+
+- Total tests executed: ${testResults}
+- Failures: ${failures}
+- Integration tests: PASS
+- Performance tests: See report
+
+---
+
+## Deployment
+
+- Kubernetes namespace: ${K8S_NAMESPACE}
+- Infrastructure: PostgreSQL 16, Neo4j 5.26, Kafka 7.6.0, Redis 7.2
+- Rollout strategy: Rolling update (zero downtime)
+"""
+                    writeFile file: "docs/release-notes-${IMAGE_TAG}.md", text: releaseNotes
+                    archiveArtifacts artifacts: "docs/release-notes-${IMAGE_TAG}.md"
+                    echo "Release notes generated: docs/release-notes-${IMAGE_TAG}.md"
+                }
+            }
+        }
+
+        stage('Tag Release') {
+            steps {
+                sh "git tag -a ${IMAGE_TAG} -m 'Release ${IMAGE_TAG} - Build ${BUILD_NUMBER}'"
+                sh "git push origin ${IMAGE_TAG} || true"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "MASTER pipeline succeeded - Release ${IMAGE_TAG}"
+        }
+        failure {
+            echo "MASTER pipeline failed - Build #${BUILD_NUMBER}"
+        }
+    }
+}

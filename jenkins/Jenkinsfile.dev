@@ -1,0 +1,120 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY        = 'circleguard'
+        K8S_NAMESPACE   = 'circleguard-dev'
+        SERVICES        = 'auth-service identity-service form-service promotion-service notification-service dashboard-service'
+        SERVICE_MAP     = 'auth-service:8180 identity-service:8083 form-service:8086 promotion-service:8088 notification-service:8082 dashboard-service:8084'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & Unit Tests') {
+            steps {
+                sh './gradlew :services:circleguard-auth-service:test \
+                              :services:circleguard-identity-service:test \
+                              :services:circleguard-form-service:test \
+                              :services:circleguard-promotion-service:test \
+                              :services:circleguard-notification-service:test \
+                              :services:circleguard-dashboard-service:test \
+                    --continue'
+            }
+            post {
+                always {
+                    junit '**/build/test-results/test/*.xml'
+                }
+            }
+        }
+
+        stage('Build JARs') {
+            steps {
+                sh './gradlew :services:circleguard-auth-service:bootJar \
+                              :services:circleguard-identity-service:bootJar \
+                              :services:circleguard-form-service:bootJar \
+                              :services:circleguard-promotion-service:bootJar \
+                              :services:circleguard-notification-service:bootJar \
+                              :services:circleguard-dashboard-service:bootJar \
+                    --parallel'
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    def serviceList = [
+                        [name: 'auth-service',         dir: 'circleguard-auth-service'],
+                        [name: 'identity-service',     dir: 'circleguard-identity-service'],
+                        [name: 'form-service',         dir: 'circleguard-form-service'],
+                        [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
+                        [name: 'notification-service', dir: 'circleguard-notification-service'],
+                        [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
+                    ]
+                    serviceList.each { svc ->
+                        sh "docker build -t ${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} services/${svc.dir}"
+                        sh "docker tag ${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} ${REGISTRY}/${svc.name}:dev-latest"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Dev') {
+            steps {
+                sh "kubectl apply -f k8s/namespaces.yaml"
+                sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
+                sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
+                sh "kubectl set image deployment/auth-service auth-service=${REGISTRY}/auth-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                sh "kubectl set image deployment/identity-service identity-service=${REGISTRY}/identity-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                sh "kubectl set image deployment/form-service form-service=${REGISTRY}/form-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                sh "kubectl set image deployment/promotion-service promotion-service=${REGISTRY}/promotion-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                sh "kubectl set image deployment/notification-service notification-service=${REGISTRY}/notification-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                sh "kubectl set image deployment/dashboard-service dashboard-service=${REGISTRY}/dashboard-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+            }
+        }
+
+        stage('Wait for Rollout') {
+            steps {
+                script {
+                    ['auth-service', 'identity-service', 'form-service',
+                     'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                        sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=120s"
+                    }
+                }
+            }
+        }
+
+        stage('Smoke Tests') {
+            steps {
+                script {
+                    def checks = [
+                        [svc: 'auth-service',         port: '8180'],
+                        [svc: 'identity-service',     port: '8083'],
+                        [svc: 'form-service',         port: '8086'],
+                        [svc: 'promotion-service',    port: '8088'],
+                        [svc: 'notification-service', port: '8082'],
+                        [svc: 'dashboard-service',    port: '8084'],
+                    ]
+                    checks.each { c ->
+                        sh "kubectl exec -n ${K8S_NAMESPACE} deploy/${c.svc} -- wget -qO- http://localhost:${c.port}/actuator/health | grep -q UP"
+                        echo "${c.svc} health check passed"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "DEV pipeline succeeded - Build #${BUILD_NUMBER}"
+        }
+        failure {
+            echo "DEV pipeline failed - Build #${BUILD_NUMBER}"
+        }
+    }
+}
