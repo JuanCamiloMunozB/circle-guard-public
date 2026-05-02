@@ -61,6 +61,7 @@ class StudentUser(HttpUser):
     """
     wait_time = between(1, 3)
     host = "http://localhost:8086"
+    weight = 10
 
     def on_start(self):
         self.anonymous_id = random_anonymous_id()

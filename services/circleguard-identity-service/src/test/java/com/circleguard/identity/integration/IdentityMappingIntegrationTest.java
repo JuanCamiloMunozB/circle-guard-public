@@ -1,6 +1,7 @@
 package com.circleguard.identity.integration;
 
 import com.circleguard.identity.service.IdentityVaultService;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -25,6 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(com.circleguard.identity.controller.IdentityVaultController.class)
 @Import(com.circleguard.identity.config.SecurityConfig.class)
+@Tag("integration")
 class IdentityMappingIntegrationTest {
 
     @Autowired

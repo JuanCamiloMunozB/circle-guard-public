@@ -3,6 +3,7 @@ package com.circleguard.notification.integration;
 import com.circleguard.notification.service.ExposureNotificationListener;
 import com.circleguard.notification.service.LmsService;
 import com.circleguard.notification.service.NotificationDispatcher;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -21,6 +22,7 @@ import static org.mockito.Mockito.*;
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@Tag("integration")
 class StatusChangeNotificationIntegrationTest {
 
     @Autowired

@@ -34,14 +34,16 @@ pipeline {
 
         stage('Integration Tests') {
             steps {
-                sh './gradlew :services:circleguard-form-service:test \
-                              :services:circleguard-promotion-service:test \
-                              :services:circleguard-notification-service:test \
-                    -Dspring.profiles.active=integration --continue'
+                sh './gradlew :services:circleguard-form-service:integrationTest \
+                              :services:circleguard-promotion-service:integrationTest \
+                              :services:circleguard-notification-service:integrationTest \
+                              :services:circleguard-identity-service:integrationTest \
+                              :services:circleguard-dashboard-service:integrationTest \
+                    --continue'
             }
             post {
                 always {
-                    junit '**/build/test-results/test/*.xml'
+                    junit '**/build/test-results/integrationTest/*.xml'
                 }
             }
         }
@@ -102,18 +104,55 @@ pipeline {
             }
         }
 
-        stage('System Validation Tests') {
+        stage('E2E Tests') {
             steps {
-                sh './gradlew :services:circleguard-auth-service:test \
-                              :services:circleguard-form-service:test \
-                              :services:circleguard-promotion-service:test \
-                    -Dspring.profiles.active=master \
-                    -Dbase.url=http://localhost \
-                    --continue'
+                sh '''
+                    set -e
+
+                    PF_AUTH=""
+                    PF_IDENTITY=""
+                    PF_FORM=""
+                    PF_PROMOTION=""
+                    PF_NOTIFICATION=""
+                    PF_DASHBOARD=""
+
+                    cleanup() {
+                      for pid in "$PF_AUTH" "$PF_IDENTITY" "$PF_FORM" "$PF_PROMOTION" "$PF_NOTIFICATION" "$PF_DASHBOARD"; do
+                        if [ -n "$pid" ]; then
+                          kill "$pid" >/dev/null 2>&1 || true
+                        fi
+                      done
+                    }
+                    trap cleanup EXIT
+
+                    kubectl port-forward svc/auth-service 18180:8180 -n ${K8S_NAMESPACE} >/tmp/pf-auth.log 2>&1 &
+                    PF_AUTH=$!
+                    kubectl port-forward svc/identity-service 18083:8083 -n ${K8S_NAMESPACE} >/tmp/pf-identity.log 2>&1 &
+                    PF_IDENTITY=$!
+                    kubectl port-forward svc/form-service 18086:8086 -n ${K8S_NAMESPACE} >/tmp/pf-form.log 2>&1 &
+                    PF_FORM=$!
+                    kubectl port-forward svc/promotion-service 18088:8088 -n ${K8S_NAMESPACE} >/tmp/pf-promotion.log 2>&1 &
+                    PF_PROMOTION=$!
+                    kubectl port-forward svc/notification-service 18082:8082 -n ${K8S_NAMESPACE} >/tmp/pf-notification.log 2>&1 &
+                    PF_NOTIFICATION=$!
+                    kubectl port-forward svc/dashboard-service 18084:8084 -n ${K8S_NAMESPACE} >/tmp/pf-dashboard.log 2>&1 &
+                    PF_DASHBOARD=$!
+
+                    sleep 10
+
+                    ./gradlew :tests:e2e:test \
+                      -Dbase.url=http://127.0.0.1 \
+                      -Dauth.port=18180 \
+                      -Didentity.port=18083 \
+                      -Dform.port=18086 \
+                      -Dpromotion.port=18088 \
+                      -Dnotification.port=18082 \
+                      -Ddashboard.port=18084
+                '''
             }
             post {
                 always {
-                    junit '**/build/test-results/test/*.xml'
+                    junit 'tests/e2e/build/test-results/test/*.xml'
                 }
             }
         }
@@ -121,7 +160,7 @@ pipeline {
         stage('Performance Tests') {
             steps {
                 sh '''
-                    pip install locust --quiet
+                    pip show locust >/dev/null 2>&1 || pip install locust --quiet
                     locust -f tests/performance/locustfile.py \
                         --headless -u 50 -r 5 -t 120s \
                         --host http://$(kubectl get svc form-service -n ${K8S_NAMESPACE} -o jsonpath="{.spec.clusterIP}"):8086 \
@@ -222,7 +261,7 @@ ${commits}
         stage('Tag Release') {
             steps {
                 sh "git tag -a ${IMAGE_TAG} -m 'Release ${IMAGE_TAG} - Build ${BUILD_NUMBER}'"
-                sh "git push origin ${IMAGE_TAG} || true"
+                sh "git push origin ${IMAGE_TAG}"
             }
         }
     }

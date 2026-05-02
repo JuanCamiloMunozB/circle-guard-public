@@ -2,6 +2,7 @@ package com.circleguard.promotion.integration;
 
 import com.circleguard.promotion.listener.SurveyListener;
 import com.circleguard.promotion.service.HealthStatusService;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,6 +20,7 @@ import static org.mockito.Mockito.*;
  */
 @SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @ActiveProfiles("test")
+@Tag("integration")
 class SurveyListenerToServiceIntegrationTest {
 
     @Autowired

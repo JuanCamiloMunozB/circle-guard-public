@@ -5,6 +5,7 @@ import com.circleguard.form.model.Question;
 import com.circleguard.form.model.QuestionType;
 import com.circleguard.form.model.Questionnaire;
 import com.circleguard.form.service.HealthSurveyService;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,6 +28,7 @@ import static org.mockito.Mockito.*;
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@Tag("integration")
 class SurveyKafkaPublishIntegrationTest {
 
     @Autowired

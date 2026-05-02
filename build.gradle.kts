@@ -43,7 +43,25 @@ subprojects {
         }
     }
 
-    tasks.withType<Test> {
+    tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
         useJUnitPlatform()
+    }
+
+    tasks.named<org.gradle.api.tasks.testing.Test>("test") {
+        useJUnitPlatform {
+            excludeTags("integration")
+        }
+    }
+
+    val sourceSets = extensions.getByType<org.gradle.api.tasks.SourceSetContainer>()
+    tasks.register<org.gradle.api.tasks.testing.Test>("integrationTest") {
+        description = "Runs tests tagged as integration."
+        group = org.gradle.language.base.plugins.LifecycleBasePlugin.VERIFICATION_GROUP
+        testClassesDirs = sourceSets["test"].output.classesDirs
+        classpath = sourceSets["test"].runtimeClasspath
+        shouldRunAfter(tasks.named("test"))
+        useJUnitPlatform {
+            includeTags("integration")
+        }
     }
 }

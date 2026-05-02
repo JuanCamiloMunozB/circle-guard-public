@@ -97,11 +97,13 @@ Para la identificación de los casos de prueba se utiliza el esquema siguiente: 
 
 ### 4.1 Pruebas unitarias
 
-Las pruebas unitarias verifican el comportamiento de componentes individuales en aislamiento, mockeando con Mockito todas las dependencias externas. Se crearon cuatro nuevas clases de prueba unitaria distribuidas entre cuatro servicios distintos, totalizando veintitrés casos nuevos. Cada caso se describe a continuación con su ficha completa.
+Las pruebas unitarias verifican el comportamiento de componentes individuales en aislamiento, mockeando con Mockito todas las dependencias externas. Los casos se organizan primero por microservicio y luego por clase de prueba, totalizando veintitrés casos nuevos. Cada bloque siguiente agrupa los escenarios del servicio correspondiente.
 
 ---
 
-#### `HealthSurveyServiceTest` — circleguard-form-service
+#### circleguard-form-service
+
+##### `HealthSurveyServiceTest`
 
 ---
 
@@ -170,7 +172,7 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 
 ---
 
-#### `SymptomMapperEdgeCasesTest` — circleguard-form-service
+##### `SymptomMapperEdgeCasesTest`
 
 ---
 
@@ -239,7 +241,9 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 
 ---
 
-#### `IdentityVaultServiceTest` — circleguard-identity-service
+#### circleguard-identity-service
+
+##### `IdentityVaultServiceTest`
 
 ---
 
@@ -308,7 +312,9 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 
 ---
 
-#### `StatusLifecycleServiceTest` — circleguard-promotion-service
+#### circleguard-promotion-service
+
+##### `StatusLifecycleServiceTest`
 
 ---
 
@@ -351,7 +357,9 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 
 ---
 
-#### `AnalyticsServiceTest` — circleguard-dashboard-service
+#### circleguard-dashboard-service
+
+##### `AnalyticsServiceTest`
 
 ---
 
@@ -430,7 +438,9 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 
 ---
 
-#### `SurveyKafkaPublishIntegrationTest` — circleguard-form-service
+#### circleguard-form-service
+
+##### `SurveyKafkaPublishIntegrationTest`
 
 ---
 
@@ -460,7 +470,9 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 
 ---
 
-#### `SurveyListenerToServiceIntegrationTest` — circleguard-promotion-service
+#### circleguard-promotion-service
+
+##### `SurveyListenerToServiceIntegrationTest`
 
 ---
 
@@ -490,7 +502,9 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 
 ---
 
-#### `DashboardPromotionClientIntegrationTest` — circleguard-dashboard-service
+#### circleguard-dashboard-service
+
+##### `DashboardPromotionClientIntegrationTest`
 
 ---
 
@@ -533,7 +547,9 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 
 ---
 
-#### `StatusChangeNotificationIntegrationTest` — circleguard-notification-service
+#### circleguard-notification-service
+
+##### `StatusChangeNotificationIntegrationTest`
 
 ---
 
@@ -576,7 +592,9 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 
 ---
 
-#### `IdentityMappingIntegrationTest` — circleguard-identity-service
+#### circleguard-identity-service
+
+##### `IdentityMappingIntegrationTest`
 
 ---
 
@@ -616,7 +634,9 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 
 ---
 
-#### `HealthSurveyFlowE2ETest`
+#### circleguard-form-service
+
+##### `HealthSurveyFlowE2ETest`
 
 ---
 
@@ -685,7 +705,9 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 
 ---
 
-#### `IdentityMappingFlowE2ETest`
+#### circleguard-identity-service
+
+##### `IdentityMappingFlowE2ETest`
 
 ---
 
@@ -728,7 +750,9 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 
 ---
 
-#### `DashboardStatsFlowE2ETest`
+#### circleguard-dashboard-service
+
+##### `DashboardStatsFlowE2ETest`
 
 ---
 
@@ -771,7 +795,9 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 
 ---
 
-#### `CertificateValidationFlowE2ETest`
+#### circleguard-auth-service
+
+##### `CertificateValidationFlowE2ETest`
 
 ---
 
