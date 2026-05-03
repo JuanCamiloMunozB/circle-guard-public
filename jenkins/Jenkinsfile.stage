@@ -71,7 +71,7 @@ pipeline {
                         [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
                     ]
                     services.each { svc ->
-                        sh "docker build -t ${REGISTRY}/${svc.name}:stage-${BUILD_NUMBER} services/${svc.dir}"
+                        sh "docker build -f services/${svc.dir}/Dockerfile -t ${REGISTRY}/${svc.name}:stage-${BUILD_NUMBER} ."
                         sh "docker tag ${REGISTRY}/${svc.name}:stage-${BUILD_NUMBER} ${REGISTRY}/${svc.name}:stage-latest"
                     }
                 }
