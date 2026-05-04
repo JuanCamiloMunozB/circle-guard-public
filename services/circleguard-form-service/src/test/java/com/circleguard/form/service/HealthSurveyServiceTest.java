@@ -100,8 +100,9 @@ class HealthSurveyServiceTest {
                 .attachmentPath("/uploads/evidence.pdf")
                 .build();
 
+        // When questionnaire is absent, symptomMapper.hasSymptoms() is never called
+        // (the Optional.map() is skipped and orElse(false) is returned directly)
         when(questionnaireService.getActiveQuestionnaire()).thenReturn(Optional.empty());
-        when(symptomMapper.hasSymptoms(any(), any())).thenReturn(false);
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.submitSurvey(survey);

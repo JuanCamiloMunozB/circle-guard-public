@@ -5,6 +5,7 @@ import com.circleguard.promotion.model.graph.UserNode;
 import com.circleguard.promotion.repository.graph.CircleNodeRepository;
 import com.circleguard.promotion.repository.graph.UserNodeRepository;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,6 +20,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Tag("integration")
 @SpringBootTest
 @Testcontainers
 public class AdministrativeCorrectionTest {
@@ -79,7 +81,7 @@ public class AdministrativeCorrectionTest {
         circleService.toggleCircleValidity(circle.getId());
 
         // 2. Action: Purge encounters to isolate circle test, then promote A
-        userRepository.purgeStaleEncounters(System.currentTimeMillis() + 10000); 
+        userRepository.purgeStaleEncounters(System.currentTimeMillis() + 10000);
         statusService.updateStatus("A", "CONFIRMED");
 
         // 3. Verify: B should NOT be affected through the invalid circle

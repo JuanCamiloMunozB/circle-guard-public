@@ -1,0 +1,11 @@
+management:
+  health:
+    mail:
+      enabled: false
+
+spring:
+  mail:
+    host: localhost
+    port: 25
+  kafka:
+    bootstrap-servers: localhost:9092

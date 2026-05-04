@@ -2,6 +2,7 @@ package com.circleguard.promotion.performance;
 
 import com.circleguard.promotion.service.HealthStatusService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -16,6 +17,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Tag("integration")
 @SpringBootTest
 @Testcontainers
 public class PromotionPerformanceTest {
@@ -33,7 +35,7 @@ public class PromotionPerformanceTest {
 
     @Autowired
     private HealthStatusService healthStatusService;
-    
+
     @org.springframework.boot.test.mock.mockito.MockBean
     private org.springframework.kafka.core.KafkaTemplate<String, Object> kafkaTemplate;
 
@@ -49,7 +51,7 @@ public class PromotionPerformanceTest {
 
         // Create 10,000 nodes and random contacts
         rootUser = UUID.randomUUID().toString();
-        
+
         // 1. Create root user
         neo4jClient.query("CREATE (:User {anonymousId: $id, status: 'ACTIVE'})")
                 .bind(rootUser).to("id").run();
@@ -67,7 +69,7 @@ public class PromotionPerformanceTest {
                 "CREATE (root)-[:ENCOUNTERED {startTime: timestamp()}]->(others)")
                 .bind(rootUser).to("id")
                 .run();
-                
+
         // Connect others in a chain/mesh (Realistic density)
         neo4jClient.query("MATCH (u1:User), (u2:User) " +
                 "WHERE u1.anonymousId <> u2.anonymousId AND rand() < 0.001 " +
@@ -79,26 +81,26 @@ public class PromotionPerformanceTest {
     @Test
     void benchmarkPromotionPerformance() {
         System.out.println("Starting Promotion Benchmark...");
-        
+
         // --- Warmup Phase ---
         // Perform a small promotion to warm up indices and JIT
-        String warmupUser = "user-1"; 
+        String warmupUser = "user-1";
         healthStatusService.updateStatus(warmupUser, "CONFIRMED");
         System.out.println("Warmup phase complete.");
-        
+
         // --- Main Benchmark ---
         long startTime = System.currentTimeMillis();
-        
+
         // Trigger promotion on rootUser (affects 10,000 node cluster)
         healthStatusService.updateStatus(rootUser, "CONFIRMED");
-        
+
         long endTime = System.currentTimeMillis();
         long duration = endTime - startTime;
-        
+
         System.out.println("==========================================");
         System.out.println("TOTAL DURATION: " + duration + "ms");
         System.out.println("==========================================");
-        
+
         // Assert NFR-1 target (< 1000ms)
         assertTrue(duration < 1000, "Promotion cascade exceeded 1 second NFR-1 target. Actual: " + duration + "ms");
 
