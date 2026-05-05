@@ -4,6 +4,9 @@ pipeline {
     environment {
         REGISTRY      = 'circleguard'
         K8S_NAMESPACE = 'circleguard-master'
+        K8S_URL       = 'https://host.docker.internal:63399'
+        K8S_CRED_ID   = 'k8s-token'
+        KUBECTL       = 'kubectl --insecure-skip-tls-verify'
         IMAGE_TAG     = "v${BUILD_NUMBER}"
     }
 
@@ -81,13 +84,16 @@ pipeline {
 
         stage('Deploy to Master') {
             steps {
-                sh "kubectl apply -f k8s/namespaces.yaml"
-                sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
-                sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
-                script {
-                    ['auth-service', 'identity-service', 'form-service',
-                     'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                        sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
+                withKubeConfig([credentialsId: K8S_CRED_ID,
+                                serverUrl: K8S_URL]) {
+                    sh "${KUBECTL} apply -f k8s/namespaces.yaml"
+                    sh "${KUBECTL} apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
+                    sh "${KUBECTL} apply -f k8s/services/ -n ${K8S_NAMESPACE}"
+                    script {
+                        ['auth-service', 'identity-service', 'form-service',
+                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                            sh "${KUBECTL} set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
+                        }
                     }
                 }
             }
@@ -95,10 +101,13 @@ pipeline {
 
         stage('Wait for Rollout') {
             steps {
-                script {
-                    ['auth-service', 'identity-service', 'form-service',
-                     'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                        sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
+                withKubeConfig([credentialsId: K8S_CRED_ID,
+                                serverUrl: K8S_URL]) {
+                    script {
+                        ['auth-service', 'identity-service', 'form-service',
+                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                            sh "${KUBECTL} rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
+                        }
                     }
                 }
             }
@@ -106,49 +115,52 @@ pipeline {
 
         stage('E2E Tests') {
             steps {
-                sh '''
-                    set -e
+                withKubeConfig([credentialsId: K8S_CRED_ID,
+                                serverUrl: K8S_URL]) {
+                    sh """
+                        set -e
 
-                    PF_AUTH=""
-                    PF_IDENTITY=""
-                    PF_FORM=""
-                    PF_PROMOTION=""
-                    PF_NOTIFICATION=""
-                    PF_DASHBOARD=""
+                        PF_AUTH=""
+                        PF_IDENTITY=""
+                        PF_FORM=""
+                        PF_PROMOTION=""
+                        PF_NOTIFICATION=""
+                        PF_DASHBOARD=""
 
-                    cleanup() {
-                      for pid in "$PF_AUTH" "$PF_IDENTITY" "$PF_FORM" "$PF_PROMOTION" "$PF_NOTIFICATION" "$PF_DASHBOARD"; do
-                        if [ -n "$pid" ]; then
-                          kill "$pid" >/dev/null 2>&1 || true
-                        fi
-                      done
-                    }
-                    trap cleanup EXIT
+                        cleanup() {
+                          for pid in "\$PF_AUTH" "\$PF_IDENTITY" "\$PF_FORM" "\$PF_PROMOTION" "\$PF_NOTIFICATION" "\$PF_DASHBOARD"; do
+                            if [ -n "\$pid" ]; then
+                              kill "\$pid" >/dev/null 2>&1 || true
+                            fi
+                          done
+                        }
+                        trap cleanup EXIT
 
-                    kubectl port-forward svc/auth-service 18180:8180 -n ${K8S_NAMESPACE} >/tmp/pf-auth.log 2>&1 &
-                    PF_AUTH=$!
-                    kubectl port-forward svc/identity-service 18083:8083 -n ${K8S_NAMESPACE} >/tmp/pf-identity.log 2>&1 &
-                    PF_IDENTITY=$!
-                    kubectl port-forward svc/form-service 18086:8086 -n ${K8S_NAMESPACE} >/tmp/pf-form.log 2>&1 &
-                    PF_FORM=$!
-                    kubectl port-forward svc/promotion-service 18088:8088 -n ${K8S_NAMESPACE} >/tmp/pf-promotion.log 2>&1 &
-                    PF_PROMOTION=$!
-                    kubectl port-forward svc/notification-service 18082:8082 -n ${K8S_NAMESPACE} >/tmp/pf-notification.log 2>&1 &
-                    PF_NOTIFICATION=$!
-                    kubectl port-forward svc/dashboard-service 18084:8084 -n ${K8S_NAMESPACE} >/tmp/pf-dashboard.log 2>&1 &
-                    PF_DASHBOARD=$!
+                        ${KUBECTL} port-forward svc/auth-service 18180:8180 -n ${K8S_NAMESPACE} >/tmp/pf-auth.log 2>&1 &
+                        PF_AUTH=\$!
+                        ${KUBECTL} port-forward svc/identity-service 18083:8083 -n ${K8S_NAMESPACE} >/tmp/pf-identity.log 2>&1 &
+                        PF_IDENTITY=\$!
+                        ${KUBECTL} port-forward svc/form-service 18086:8086 -n ${K8S_NAMESPACE} >/tmp/pf-form.log 2>&1 &
+                        PF_FORM=\$!
+                        ${KUBECTL} port-forward svc/promotion-service 18088:8088 -n ${K8S_NAMESPACE} >/tmp/pf-promotion.log 2>&1 &
+                        PF_PROMOTION=\$!
+                        ${KUBECTL} port-forward svc/notification-service 18082:8082 -n ${K8S_NAMESPACE} >/tmp/pf-notification.log 2>&1 &
+                        PF_NOTIFICATION=\$!
+                        ${KUBECTL} port-forward svc/dashboard-service 18084:8084 -n ${K8S_NAMESPACE} >/tmp/pf-dashboard.log 2>&1 &
+                        PF_DASHBOARD=\$!
 
-                    sleep 10
+                        sleep 10
 
-                    ./gradlew :tests:e2e:test \
-                      -Dbase.url=http://127.0.0.1 \
-                      -Dauth.port=18180 \
-                      -Didentity.port=18083 \
-                      -Dform.port=18086 \
-                      -Dpromotion.port=18088 \
-                      -Dnotification.port=18082 \
-                      -Ddashboard.port=18084
-                '''
+                        ./gradlew :tests:e2e:test \
+                          -Dbase.url=http://127.0.0.1 \
+                          -Dauth.port=18180 \
+                          -Didentity.port=18083 \
+                          -Dform.port=18086 \
+                          -Dpromotion.port=18088 \
+                          -Dnotification.port=18082 \
+                          -Ddashboard.port=18084
+                    """
+                }
             }
             post {
                 always {
@@ -159,15 +171,18 @@ pipeline {
 
         stage('Performance Tests') {
             steps {
-                sh '''
-                    pip show locust >/dev/null 2>&1 || pip install locust --quiet
-                    locust -f tests/performance/locustfile.py \
-                        --headless -u 50 -r 5 -t 120s \
-                        --host http://$(kubectl get svc form-service -n ${K8S_NAMESPACE} -o jsonpath="{.spec.clusterIP}"):8086 \
-                        --html tests/performance/locust-report-master.html \
-                        --csv tests/performance/locust-master \
-                        --exit-code-on-error 0
-                '''
+                withKubeConfig([credentialsId: K8S_CRED_ID,
+                                serverUrl: K8S_URL]) {
+                    sh """
+                        pip show locust >/dev/null 2>&1 || pip install locust --quiet
+                        locust -f tests/performance/locustfile.py \
+                            --headless -u 50 -r 5 -t 120s \
+                            --host http://\$(${KUBECTL} get svc form-service -n ${K8S_NAMESPACE} -o jsonpath="{.spec.clusterIP}"):8086 \
+                            --html tests/performance/locust-report-master.html \
+                            --csv tests/performance/locust-master \
+                            --exit-code-on-error 0
+                    """
+                }
             }
             post {
                 always {
