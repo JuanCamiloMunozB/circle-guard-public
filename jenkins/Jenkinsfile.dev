@@ -113,7 +113,7 @@ pipeline {
                         ]
                         checks.each { c ->
                             def health = sh(
-                                script: "${KUBECTL} exec -n ${K8S_NAMESPACE} deploy/${c.svc} -- wget -qO- http://localhost:${c.port}/actuator/health 2>&1 || true",
+                                script: "${KUBECTL} exec -n ${K8S_NAMESPACE} deploy/${c.svc} -- sh -c 'wget -O /tmp/health http://localhost:${c.port}/actuator/health 2>/dev/null; cat /tmp/health'",
                                 returnStdout: true
                             ).trim()
                             echo "${c.svc} health: ${health}"

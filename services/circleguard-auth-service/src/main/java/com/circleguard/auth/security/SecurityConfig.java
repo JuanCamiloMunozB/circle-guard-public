@@ -1,6 +1,7 @@
 package com.circleguard.auth.security;
 
 import com.circleguard.auth.service.CustomUserDetailsService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.ldap.core.support.LdapContextSource;
@@ -19,6 +20,18 @@ import org.springframework.security.web.SecurityFilterChain;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
+
+    @Value("${spring.ldap.urls:ldap://localhost:389}")
+    private String ldapUrl;
+
+    @Value("${spring.ldap.base:dc=circleguard,dc=edu}")
+    private String ldapBase;
+
+    @Value("${spring.ldap.username:cn=admin,dc=circleguard,dc=edu}")
+    private String ldapUsername;
+
+    @Value("${spring.ldap.password:admin}")
+    private String ldapPassword;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter) throws Exception {
@@ -56,10 +69,10 @@ public class SecurityConfig {
     @Bean
     public LdapContextSource contextSource() {
         LdapContextSource contextSource = new LdapContextSource();
-        contextSource.setUrl("ldap://localhost:389");
-        contextSource.setBase("dc=circleguard,dc=edu");
-        contextSource.setUserDn("cn=admin,dc=circleguard,dc=edu");
-        contextSource.setPassword("admin");
+        contextSource.setUrl(ldapUrl);
+        contextSource.setBase(ldapBase);
+        contextSource.setUserDn(ldapUsername);
+        contextSource.setPassword(ldapPassword);
         return contextSource;
     }
 
