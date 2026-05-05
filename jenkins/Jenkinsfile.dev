@@ -112,7 +112,14 @@ pipeline {
                             [svc: 'dashboard-service',    port: '8084'],
                         ]
                         checks.each { c ->
-                            sh "${KUBECTL} exec -n ${K8S_NAMESPACE} deploy/${c.svc} -- wget -qO- http://localhost:${c.port}/actuator/health | grep -q UP"
+                            def health = sh(
+                                script: "${KUBECTL} exec -n ${K8S_NAMESPACE} deploy/${c.svc} -- wget -qO- http://localhost:${c.port}/actuator/health 2>&1 || true",
+                                returnStdout: true
+                            ).trim()
+                            echo "${c.svc} health: ${health}"
+                            if (!health.contains('"status":"UP"')) {
+                                error("${c.svc} health check failed: ${health}")
+                            }
                             echo "${c.svc} health check passed"
                         }
                     }
