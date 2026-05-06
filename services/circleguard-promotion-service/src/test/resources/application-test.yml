@@ -1,14 +1,33 @@
 spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: password
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
   flyway:
     enabled: false
   sql:
     init:
       mode: never
-  jpa:
-    hibernate:
-      ddl-auto: none
   neo4j:
     uri: bolt://localhost:7687
     authentication:
       username: neo4j
       password: password
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: promotion-service-group
+      auto-offset-reset: earliest
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+jwt:
+  secret: "test-jwt-secret-key-for-unit-tests-only-min256bits"
+  expiration: 3600000
