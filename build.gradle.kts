@@ -63,6 +63,5 @@ subprojects {
         useJUnitPlatform {
             includeTags("integration")
         }
-        System.getenv("DOCKER_HOST")?.let { environment("DOCKER_HOST", it) }
     }
 }
