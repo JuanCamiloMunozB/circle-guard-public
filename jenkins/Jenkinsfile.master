@@ -19,6 +19,11 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+                script {
+                    if (params.SKIP_DOCKER_BUILD) {
+                        env.IMAGE_TAG = 'latest'
+                    }
+                }
             }
         }
 

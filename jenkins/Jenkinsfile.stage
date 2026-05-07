@@ -18,6 +18,9 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+                script {
+                    env.DEPLOY_TAG = params.SKIP_DOCKER_BUILD ? 'stage-latest' : "stage-${BUILD_NUMBER}"
+                }
             }
         }
 
@@ -97,7 +100,7 @@ pipeline {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "${KUBECTL} set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:stage-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                            sh "${KUBECTL} set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
                         }
                     }
                 }

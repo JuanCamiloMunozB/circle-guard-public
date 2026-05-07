@@ -20,6 +20,9 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+                script {
+                    env.DEPLOY_TAG = params.SKIP_DOCKER_BUILD ? 'dev-latest' : "dev-${BUILD_NUMBER}"
+                }
             }
         }
 
@@ -80,12 +83,12 @@ pipeline {
                     sh "${KUBECTL} apply -f k8s/namespaces.yaml"
                     sh "${KUBECTL} apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
                     sh "${KUBECTL} apply -f k8s/services/ -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/auth-service         auth-service=${REGISTRY}/auth-service:dev-${BUILD_NUMBER}         -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/identity-service     identity-service=${REGISTRY}/identity-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/form-service         form-service=${REGISTRY}/form-service:dev-${BUILD_NUMBER}         -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/promotion-service    promotion-service=${REGISTRY}/promotion-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/notification-service notification-service=${REGISTRY}/notification-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/dashboard-service    dashboard-service=${REGISTRY}/dashboard-service:dev-${BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                    sh "${KUBECTL} set image deployment/auth-service         auth-service=${REGISTRY}/auth-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
+                    sh "${KUBECTL} set image deployment/identity-service     identity-service=${REGISTRY}/identity-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    sh "${KUBECTL} set image deployment/form-service         form-service=${REGISTRY}/form-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
+                    sh "${KUBECTL} set image deployment/promotion-service    promotion-service=${REGISTRY}/promotion-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    sh "${KUBECTL} set image deployment/notification-service notification-service=${REGISTRY}/notification-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    sh "${KUBECTL} set image deployment/dashboard-service    dashboard-service=${REGISTRY}/dashboard-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
                 }
             }
         }
