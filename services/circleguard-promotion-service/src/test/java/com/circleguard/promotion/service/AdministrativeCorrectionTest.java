@@ -4,9 +4,13 @@ import com.circleguard.promotion.model.graph.CircleNode;
 import com.circleguard.promotion.model.graph.UserNode;
 import com.circleguard.promotion.repository.graph.CircleNodeRepository;
 import com.circleguard.promotion.repository.graph.UserNodeRepository;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.neo4j.harness.Neo4j;
+import org.neo4j.harness.Neo4jBuilders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -14,34 +18,35 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.Neo4jContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Tag("integration")
 @SpringBootTest
-@Testcontainers
 @ActiveProfiles("test")
 public class AdministrativeCorrectionTest {
 
-    @Container
-    static Neo4jContainer<?> neo4j = new Neo4jContainer<>("neo4j:5.12.0")
-            .withAdminPassword("password");
+    private static Neo4j embeddedNeo4j;
 
-    @Container
-    static GenericContainer<?> redis = new GenericContainer<>("redis:7.2.1")
-            .withExposedPorts(6379);
+    @BeforeAll
+    static void initializeNeo4j() {
+        embeddedNeo4j = Neo4jBuilders.newInProcessBuilder()
+                .withDisabledServer()
+                .build();
+    }
+
+    @AfterAll
+    static void closeNeo4j() {
+        if (embeddedNeo4j != null) {
+            embeddedNeo4j.close();
+        }
+    }
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
-        registry.add("spring.neo4j.uri", neo4j::getBoltUrl);
+        registry.add("spring.neo4j.uri", () -> embeddedNeo4j.boltURI().toString());
         registry.add("spring.neo4j.authentication.username", () -> "neo4j");
-        registry.add("spring.neo4j.authentication.password", () -> "password");
-        registry.add("spring.data.redis.host", redis::getHost);
-        registry.add("spring.data.redis.port", redis::getFirstMappedPort);
+        registry.add("spring.neo4j.authentication.password", () -> "");
     }
 
     @Autowired

@@ -27,8 +27,15 @@ dependencies {
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
-    testImplementation("org.testcontainers:junit-jupiter:1.19.3")
-    testImplementation("org.testcontainers:postgresql:1.19.3")
-    testImplementation("org.testcontainers:neo4j:1.19.3")
+    testImplementation("javax.xml.bind:jaxb-api:2.3.1")
+    testImplementation("com.sun.xml.bind:jaxb-impl:2.3.9")
+    testImplementation("org.neo4j.test:neo4j-harness:5.26.0") {
+        exclude(group = "org.slf4j", module = "slf4j-nop")
+        exclude(group = "org.slf4j", module = "slf4j-simple")
+        exclude(group = "org.apache.logging.log4j", module = "log4j-slf4j-impl")
+        exclude(group = "org.apache.logging.log4j", module = "log4j-slf4j2-impl")
+        exclude(group = "ch.qos.logback")
+        exclude(group = "org.neo4j", module = "neo4j-slf4j-provider")
+    }
     testImplementation("com.h2database:h2")
 }

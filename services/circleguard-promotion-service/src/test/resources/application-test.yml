@@ -27,6 +27,8 @@ spring:
     redis:
       host: localhost
       port: 6379
+  cache:
+    type: none
 
 jwt:
   secret: "test-jwt-secret-key-for-unit-tests-only-min256bits"
