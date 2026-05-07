@@ -1,6 +1,7 @@
 package com.circleguard.promotion.performance;
 
 import com.circleguard.promotion.service.HealthStatusService;
+import com.github.fppt.jedismock.RedisServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,6 +16,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.io.IOException;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -25,26 +27,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class PromotionPerformanceTest {
 
     private static Neo4j embeddedNeo4j;
+    private static RedisServer embeddedRedis;
 
     @BeforeAll
-    static void initializeNeo4j() {
+    static void startEmbeddedServers() throws IOException {
         embeddedNeo4j = Neo4jBuilders.newInProcessBuilder()
                 .withDisabledServer()
                 .build();
+        embeddedRedis = RedisServer.newRedisServer().start();
     }
 
     @AfterAll
-    static void closeNeo4j() {
+    static void stopEmbeddedServers() throws IOException {
         if (embeddedNeo4j != null) {
             embeddedNeo4j.close();
+        }
+        if (embeddedRedis != null) {
+            embeddedRedis.stop();
         }
     }
 
     @DynamicPropertySource
-    static void neo4jProperties(DynamicPropertyRegistry registry) {
+    static void embeddedProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.neo4j.uri", () -> embeddedNeo4j.boltURI().toString());
         registry.add("spring.neo4j.authentication.username", () -> "neo4j");
         registry.add("spring.neo4j.authentication.password", () -> "");
+        registry.add("spring.data.redis.host", () -> embeddedRedis.getHost());
+        registry.add("spring.data.redis.port", () -> embeddedRedis.getBindPort());
     }
 
     @Autowired

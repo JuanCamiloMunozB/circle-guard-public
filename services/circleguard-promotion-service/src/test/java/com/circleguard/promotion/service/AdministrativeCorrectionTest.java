@@ -4,6 +4,7 @@ import com.circleguard.promotion.model.graph.CircleNode;
 import com.circleguard.promotion.model.graph.UserNode;
 import com.circleguard.promotion.repository.graph.CircleNodeRepository;
 import com.circleguard.promotion.repository.graph.UserNodeRepository;
+import com.github.fppt.jedismock.RedisServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +20,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.io.IOException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Tag("integration")
@@ -27,18 +30,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class AdministrativeCorrectionTest {
 
     private static Neo4j embeddedNeo4j;
+    private static RedisServer embeddedRedis;
 
     @BeforeAll
-    static void initializeNeo4j() {
+    static void startEmbeddedServers() throws IOException {
         embeddedNeo4j = Neo4jBuilders.newInProcessBuilder()
                 .withDisabledServer()
                 .build();
+        embeddedRedis = RedisServer.newRedisServer().start();
     }
 
     @AfterAll
-    static void closeNeo4j() {
+    static void stopEmbeddedServers() throws IOException {
         if (embeddedNeo4j != null) {
             embeddedNeo4j.close();
+        }
+        if (embeddedRedis != null) {
+            embeddedRedis.stop();
         }
     }
 
@@ -47,6 +55,8 @@ public class AdministrativeCorrectionTest {
         registry.add("spring.neo4j.uri", () -> embeddedNeo4j.boltURI().toString());
         registry.add("spring.neo4j.authentication.username", () -> "neo4j");
         registry.add("spring.neo4j.authentication.password", () -> "");
+        registry.add("spring.data.redis.host", () -> embeddedRedis.getHost());
+        registry.add("spring.data.redis.port", () -> embeddedRedis.getBindPort());
     }
 
     @Autowired

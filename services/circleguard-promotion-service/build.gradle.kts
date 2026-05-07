@@ -29,6 +29,7 @@ dependencies {
     testImplementation("org.springframework.security:spring-security-test")
     testImplementation("javax.xml.bind:jaxb-api:2.3.1")
     testImplementation("com.sun.xml.bind:jaxb-impl:2.3.9")
+    testImplementation("com.github.fppt:jedis-mock:1.1.0")
     testImplementation("org.neo4j.test:neo4j-harness:5.26.0") {
         exclude(group = "org.slf4j", module = "slf4j-nop")
         exclude(group = "org.slf4j", module = "slf4j-simple")
