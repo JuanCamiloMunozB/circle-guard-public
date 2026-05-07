@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    parameters {
+        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
+    }
+
     environment {
         REGISTRY        = 'circleguard'
         K8S_NAMESPACE   = 'circleguard-dev'
@@ -37,6 +41,7 @@ pipeline {
         }
 
         stage('Build JARs') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
                 sh './gradlew :services:circleguard-auth-service:bootJar \
                               :services:circleguard-identity-service:bootJar \
@@ -49,6 +54,7 @@ pipeline {
         }
 
         stage('Build Docker Images') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
                 script {
                     def serviceList = [
