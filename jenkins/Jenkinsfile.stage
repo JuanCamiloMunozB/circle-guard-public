@@ -182,6 +182,7 @@ pipeline {
                 withKubeConfig([credentialsId: K8S_CRED_ID,
                                 serverUrl: K8S_URL]) {
                     sh """
+                        export PATH="\$PATH:\$HOME/.local/bin"
                         pip3 show locust >/dev/null 2>&1 || pip3 install locust --quiet --break-system-packages
                         locust -f tests/performance/locustfile.py \
                             --headless -u 10 -r 2 -t 60s \
