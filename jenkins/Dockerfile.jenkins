@@ -33,6 +33,10 @@ RUN KUBECTL_VERSION=$(curl -fsSL https://dl.k8s.io/release/stable.txt) \
 
 RUN groupadd -f docker
 
+# Git identity required for tagging in CI
+RUN git config --global user.email "jenkins@circleguard.ci" \
+    && git config --global user.name "Jenkins CI"
+
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
