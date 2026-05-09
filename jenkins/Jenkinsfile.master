@@ -100,7 +100,7 @@ pipeline {
 
         stage('Deploy to Master') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     sh "kubectl apply -f k8s/namespaces.yaml"
                     sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
@@ -117,7 +117,7 @@ pipeline {
 
         stage('Wait for Rollout') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
