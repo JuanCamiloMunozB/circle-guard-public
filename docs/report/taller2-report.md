@@ -23,27 +23,19 @@ El siguiente diagrama de secuencia representa el flujo principal del sistema, qu
 
 ## 2. Configuración de Jenkins, Docker y Kubernetes (Actividad 1 — 10%)
 
-### 2.1 Infraestructura base con Docker Compose
-
-Para el desarrollo local, el proyecto ya contaba con el archivo `docker-compose.dev.yml`, que provee todos los servicios de infraestructura necesarios. PostgreSQL 16 actúa como base de datos relacional, con bases independientes por servicio (`circleguard_auth`, `circleguard_identity`, `circleguard_form`, `circleguard_promotion` y `circleguard_dashboard`). Neo4j 5.26 almacena el grafo de contactos que utiliza `promotion-service` para propagar estados de riesgo mediante recorridos recursivos. Apache Kafka 7.6.0 con Zookeeper gestiona la mensajería asíncrona entre los servicios productores y consumidores. Redis 7.2 sirve como caché de alta velocidad para la validación de tokens QR y la caché de estados de salud en `promotion-service`. Finalmente, OpenLDAP 1.5.0 simula el directorio universitario para la autenticación a través de `auth-service`.
-
-Este stack de infraestructura se levanta con un único comando en desarrollo y constituye la base sobre la que se construyeron los ambientes Kubernetes para stage y master.
-
-[Image: Ejecución de `docker-compose up` con los seis contenedores de infraestructura levantados y en estado healthy]
-
-### 2.2 Dockerfiles por servicio
+### 2.1 Dockerfiles por servicio
 
 Se creó un Dockerfile para cada uno de los seis servicios seleccionados, ubicado dentro del directorio de cada microservicio. Todos utilizan la imagen base `eclipse-temurin:21-jre-alpine`, que combina el JRE de Java 21 con una distribución Alpine Linux minimalista, reduciendo significativamente el tamaño final de la imagen frente a alternativas más pesadas como `openjdk:21`. El proceso de construcción de la imagen parte del fat-JAR generado por Gradle y lo expone en el puerto correspondiente a cada servicio.
 
-[Image: Lista de imágenes Docker construidas con sus tamaños, mostrando las seis imágenes de CircleGuard]
+![Dockerfiles por servicio](./images/dockerfiles.png)
 
-### 2.3 Manifiestos de Kubernetes
+### 2.2 Manifiestos de Kubernetes
 
 Para el despliegue en Kubernetes se estructuró el directorio `k8s/` con una separación clara entre la infraestructura compartida y los manifiestos de los servicios de aplicación. El archivo `namespaces.yaml` define tres namespaces independientes: `circleguard-dev`, `circleguard-stage` y `circleguard-master`, que corresponden a los tres ambientes del ciclo de entrega.
 
 Dentro del subdirectorio `infrastructure/` se encuentran cuatro manifiestos que despliegan los componentes de infraestructura: PostgreSQL con un `PersistentVolumeClaim` de 5 GiB y un `ConfigMap` que ejecuta el script `init-db.sql` al inicializar el contenedor; Kafka junto con su Zookeeper como par inseparable; Redis en modo de instancia única; y Neo4j con su propio `PersistentVolumeClaim`.
 
-Cada uno de los seis servicios de aplicación cuenta con su propio manifiesto en `k8s/services/`. Cada manifiesto está compuesto por un `Deployment` con una réplica inicial, sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`), y un `Service` de tipo `NodePort` que expone el puerto del contenedor al exterior del nodo. Las variables de entorno del servicio (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios) provienen del `ConfigMap` compartido `circleguard-config` y del `Secret` `circleguard-secrets`, referenciados mediante `envFrom:` y `env:` según el recurso.
+Los manifiestos de los seis servicios de aplicación están separados en dos directorios según el tipo de recurso de Kubernetes. El directorio `k8s/deployments/` contiene un archivo por microservicio con el recurso `Deployment`: una réplica inicial con sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`). Las variables de entorno (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios) provienen del `ConfigMap` compartido `circleguard-config` y del `Secret` `circleguard-secrets`, referenciados mediante `envFrom:` y `env:`. El directorio `k8s/services/` contiene un recurso `Service` de tipo `NodePort` por microservicio, organizado en tres subdirectorios (`dev/`, `stage/`, `master/`), cada uno con un rango de puertos distinto para evitar conflictos de asignación de NodePort a nivel de clúster: los NodePorts son un recurso global del clúster y no están acotados al namespace.
 
 La dependencia de los servicios respecto de la infraestructura (PostgreSQL, Neo4j, Kafka, Redis) se gestiona exclusivamente mediante las `readinessProbe`: mientras una dependencia no esté disponible, el pod no pasa al estado `Ready` y Kubernetes no le envía tráfico. Se optó por este enfoque en lugar de `initContainers` porque los `initContainers` requieren que las imágenes de utilidades (p. ej. `busybox`) estén en caché o disponibles en Docker Hub en el momento del despliegue; en entornos locales con Docker Desktop eso genera fallos `ErrImagePull` si Docker Hub aplica rate limiting. La `readinessProbe` funciona con la imagen de la aplicación, que ya está disponible localmente.
 
@@ -51,9 +43,9 @@ Esta separación implica también una separación en el ciclo de vida de los des
 
 El archivo `jenkins/config/jenkins-account.yaml` define el control de acceso basado en roles (RBAC) para la cuenta de servicio de Jenkins. Se declara un `ServiceAccount` en el namespace `default` y se crean `Role` y `RoleBinding` en cada uno de los tres namespaces de la aplicación (`circleguard-dev`, `circleguard-stage` y `circleguard-master`), otorgando permisos de lectura, creación, actualización y eliminación sobre `Deployments`, `StatefulSets`, `ReplicaSets`, `Services`, `ConfigMaps`, `PersistentVolumeClaims`, `Pods` y `Pods/portforward`. Adicionalmente, un `ClusterRole` y su correspondiente `ClusterRoleBinding` otorgan permisos sobre recursos de ámbito de clúster como `Namespaces` y `PersistentVolumes`, necesarios para la ejecución de `kubectl apply -f k8s/namespaces.yaml` desde el pipeline.
 
-[Image: Salida de `kubectl get all -n circleguard-dev` mostrando pods, servicios y deployments de los seis microservicios en estado Running]
+![Microservicios desplegados en el namespace circleguard-dev, con sus respectivos pods y servicios listados](./images/kubectl_get_all.png)
 
-### 2.4 Configuración de Jenkins
+### 2.3 Configuración de Jenkins
 
 Jenkins actúa como el orquestador central de los pipelines. El `Dockerfile.jenkins` personaliza la imagen oficial `jenkins/jenkins:lts-jdk21` con la instalación de las herramientas necesarias: Docker CLI (para construir imágenes dentro del agente), `kubectl` con versión pinada vía argumento de build (descargado como binario estático), Python 3 con `pip3` (para instalar y ejecutar Locust en los stages de rendimiento) y una identidad Git global (`jenkins@circleguard.ci` / `Jenkins CI`) requerida para la creación de tags Git anotados en el pipeline master. Los plugins esenciales (`workflow-aggregator`, `git`, `kubernetes-cli`, `junit`, `htmlpublisher`, `configuration-as-code`, `job-dsl`, entre otros) se pre-instalan durante el build de la imagen mediante `jenkins-plugin-cli` leyendo el archivo `plugins.txt`, eliminando el paso manual del wizard inicial.
 
@@ -75,9 +67,9 @@ El pipeline de desarrollo cubre el ciclo básico que permite a un desarrollador 
 
 Cuando `SKIP_DOCKER_BUILD` es `false`, la etapa de compilación de JARs genera los fat-JARs en paralelo y la etapa de construcción de imágenes Docker etiqueta cada imagen con `dev-<BUILD_NUMBER>` y la re-etiqueta como `dev-latest`. La etapa de despliegue aplica los manifiestos de Kubernetes al namespace `circleguard-dev` mediante `kubectl apply` y actualiza la imagen de cada `Deployment` usando `DEPLOY_TAG`. Antes de declarar el pipeline exitoso, la etapa de espera verifica mediante `kubectl rollout status` que todos los deployments han completado su actualización, y la etapa de smoke tests consulta el endpoint `/actuator/health` de cada servicio para confirmar que están respondiendo correctamente.
 
-[Image: Vista de etapas del pipeline dev en Jenkins, todas en verde, con tiempos de ejecución por etapa]
+![Pipeline dev y sus etapas](./images/pipeline_dev.png)
 
-[Image: Resultado de las pruebas unitarias en Jenkins mostrando todos los tests pasando]
+![Resultados de las pruebas](./images/pipeline_dev_tests.png)
 
 ### 3.2 Pipeline de stage — `Jenkinsfile.stage`
 
@@ -1076,13 +1068,13 @@ El bootstrap del entorno CI/CD se realiza en cinco pasos secuenciales, ejecutado
 **Paso 2 — Crear los namespaces.** Desde Git Bash:
 
 ```bash
-bash jenkins/scripts/setup-namespaces.sh
+./jenkins/scripts/setup-namespaces.sh
 ```
 
 **Paso 3 — Aplicar el ServiceAccount, RBAC y obtener las credenciales K8s.** Este script aplica `jenkins-account.yaml`, extrae el token del `Secret` `jenkins-token` y escribe `K8S_SA_TOKEN` y `K8S_API_SERVER` en el archivo `.env`. JCasC los leerá al arrancar Jenkins y creará la credencial `k8s-sa-token` automáticamente.
 
 ```bash
-bash jenkins/scripts/setup-k8s-jenkins.sh
+./jenkins/scripts/setup-k8s-jenkins.sh
 ```
 
 Volver a ejecutar este script cada vez que Docker Desktop reinicie y cambie el puerto del API server, ya que `K8S_API_SERVER` incluye ese puerto.
@@ -1090,9 +1082,9 @@ Volver a ejecutar este script cada vez que Docker Desktop reinicie y cambie el p
 **Paso 4 — Desplegar la infraestructura en cada namespace.** Los componentes de infraestructura (PostgreSQL, Neo4j, Redis, Kafka, Zookeeper, LDAP) no se gestionan en el pipeline; se instalan una vez por namespace con el script de bootstrap. Los pipelines asumen que la infraestructura ya está corriendo.
 
 ```bash
-bash k8s/install-infra.sh circleguard-dev
-bash k8s/install-infra.sh circleguard-stage
-bash k8s/install-infra.sh circleguard-master
+./k8s/install-infra.sh circleguard-dev
+./k8s/install-infra.sh circleguard-stage
+./k8s/install-infra.sh circleguard-master
 ```
 
 El script aplica los manifiestos del directorio `k8s/infrastructure/`, espera a que cada deployment esté `Ready` con un timeout de 300 segundos y confirma que la infraestructura está disponible antes de salir. Solo es necesario repetirlo si se elimina el namespace o se reinicia el clúster con pérdida de datos.
@@ -1109,7 +1101,7 @@ Después de un minuto aproximadamente, Jenkins estará disponible en `http://loc
 
 Una vez Jenkins esté corriendo, los tres jobs (`circleguard-dev`, `circleguard-stage`, `circleguard-master`) ya están creados por JCasC y apuntan al repositorio Git configurado en `.env`. Para ejecutar cualquiera de ellos basta con abrirlo en la UI y hacer clic en **Build with Parameters**, dejar los valores por defecto y hacer clic en **Build**.
 
-> **Prerequisito:** antes del primer build de cada namespace, la infraestructura debe estar desplegada con `bash k8s/install-infra.sh <namespace>` (Paso 4 de la sección anterior). Los pipelines solo despliegan los servicios de aplicación (`k8s/services/`) y asumen que PostgreSQL, Neo4j, Kafka, Redis y LDAP ya están corriendo.
+> **Prerequisito:** antes del primer build de cada namespace, la infraestructura debe estar desplegada con `bash k8s/install-infra.sh <namespace>` (Paso 4 de la sección anterior). Los pipelines solo despliegan los servicios de aplicación (`k8s/deployments/` y `k8s/services/<env>/`) y asumen que PostgreSQL, Neo4j, Kafka, Redis y LDAP ya están corriendo.
 
 Cada pipeline ejecuta una secuencia distinta:
 
@@ -1160,8 +1152,8 @@ kubectl delete deployments --all -n circleguard-dev
 kubectl delete namespace circleguard-dev
 
 # Recrear todo el namespace desde cero
-bash jenkins/scripts/setup-namespaces.sh
-bash k8s/install-infra.sh circleguard-dev
+./jenkins/scripts/setup-namespaces.sh
+./k8s/install-infra.sh circleguard-dev
 # Los servicios de aplicación los despliega el pipeline en el siguiente build
 ```
 

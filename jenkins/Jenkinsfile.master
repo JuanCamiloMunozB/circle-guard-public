@@ -103,6 +103,7 @@ pipeline {
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     sh "kubectl apply -f k8s/namespaces.yaml"
                     sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/deployments/ -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
                     script {
                         ['auth-service', 'identity-service', 'form-service',
@@ -129,20 +130,26 @@ pipeline {
 
         stage('E2E Tests') {
             steps {
-                withEnv([
-                    "BASE_URL=http://${NODE_HOST}",
-                    "AUTH_PORT=30180",
-                    "IDENTITY_PORT=30083",
-                    "FORM_PORT=30086",
-                    "PROMOTION_PORT=30088",
-                    "NOTIFICATION_PORT=30082",
-                    "DASHBOARD_PORT=30084"
-                ]) {
-                    sh 'chmod +x jenkins/scripts/run-e2e.sh && jenkins/scripts/run-e2e.sh'
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                    sh """
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/auth-service         8180:8180 &
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/identity-service     8083:8083 &
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/form-service         8086:8086 &
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/promotion-service    8088:8088 &
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/notification-service 8082:8082 &
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/dashboard-service    8084:8084 &
+                        sleep 5
+                        chmod +x jenkins/scripts/run-e2e.sh
+                        BASE_URL=http://localhost \\
+                        AUTH_PORT=8180 IDENTITY_PORT=8083 FORM_PORT=8086 \\
+                        PROMOTION_PORT=8088 NOTIFICATION_PORT=8082 DASHBOARD_PORT=8084 \\
+                        jenkins/scripts/run-e2e.sh
+                    """
                 }
             }
             post {
                 always {
+                    sh 'pkill -f "kubectl port-forward" || true'
                     junit 'tests/e2e/build/test-results/test/*.xml'
                 }
             }
@@ -150,21 +157,22 @@ pipeline {
 
         stage('Performance Tests') {
             steps {
-                withEnv([
-                    "LOCUST_HOST=http://${NODE_HOST}:30086",
-                    "DASHBOARD_HOST=http://${NODE_HOST}:30084",
-                    "PROFILE=master"
-                ]) {
-                    sh '''
-                        export PATH="$PATH:$HOME/.local/bin"
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                    sh """
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/form-service      8086:8086 &
+                        kubectl port-forward -n ${K8S_NAMESPACE} svc/dashboard-service 8084:8084 &
+                        sleep 3
+                        export PATH="\$PATH:\$HOME/.local/bin"
                         pip3 show locust >/dev/null 2>&1 || pip3 install locust --quiet --break-system-packages
                         chmod +x jenkins/scripts/run-locust.sh
+                        LOCUST_HOST=http://localhost:8086 DASHBOARD_HOST=http://localhost:8084 PROFILE=master \\
                         jenkins/scripts/run-locust.sh
-                    '''
+                    """
                 }
             }
             post {
                 always {
+                    sh 'pkill -f "kubectl port-forward" || true'
                     publishHTML(target: [
                         reportDir: 'tests/performance/reports',
                         reportFiles: 'locust-report-master.html',
