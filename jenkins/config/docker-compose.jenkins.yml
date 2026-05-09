@@ -1,0 +1,27 @@
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins
+    container_name: jenkins
+    # Loads JENKINS_ADMIN_*, GIT_*, DOCKERHUB_* from the project-level .env file
+    # (gitignored). JCasC reads them via ${VAR} substitution at startup.
+    env_file:
+      - ../../.env
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - circleguard_jenkins_home:/var/jenkins_home
+      # Host Docker socket so Jenkins can build images and run docker commands
+      - /var/run/docker.sock:/var/run/docker.sock
+      # JCasC configuration: jobs, credentials, admin user
+      - ./casc.yaml:/var/jenkins_home/casc.yaml:ro
+    # Adds GID 0 (root) as a supplementary group so the jenkins user can write
+    # to the host docker socket without changing its file permissions.
+    group_add:
+      - "0"
+    restart: unless-stopped
+
+volumes:
+  circleguard_jenkins_home:

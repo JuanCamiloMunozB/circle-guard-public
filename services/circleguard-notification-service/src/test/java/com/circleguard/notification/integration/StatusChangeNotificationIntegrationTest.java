@@ -1,6 +1,5 @@
 package com.circleguard.notification.integration;
 
-import com.circleguard.notification.service.ExposureNotificationListener;
 import com.circleguard.notification.service.LmsService;
 import com.circleguard.notification.service.NotificationDispatcher;
 import org.junit.jupiter.api.Tag;
@@ -8,34 +7,55 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.MessageListenerContainer;
+import org.springframework.kafka.test.EmbeddedKafkaBroker;
+import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.kafka.test.utils.ContainerTestUtils;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
- * Integration test: verifies that ExposureNotificationListener correctly delegates
- * to NotificationDispatcher and LmsService when a promotion.status.changed event arrives.
+ * Integration test: publishes a promotion.status.changed event to an in-process
+ * embedded Kafka broker and verifies that the real ExposureNotificationListener
+ * (a @KafkaListener bean) consumes it and delegates to NotificationDispatcher
+ * and LmsService.
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+        "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
+        "spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer"
+})
+@EmbeddedKafka(partitions = 1, topics = {"promotion.status.changed"})
 @ActiveProfiles("test")
 @Tag("integration")
 class StatusChangeNotificationIntegrationTest {
 
     @Autowired
-    private ExposureNotificationListener listener;
+    private KafkaTemplate<String, String> kafkaTemplate;
+
+    @Autowired
+    private EmbeddedKafkaBroker embeddedKafka;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry registry;
 
     @MockBean
     private NotificationDispatcher dispatcher;
 
     @MockBean
     private LmsService lmsService;
-
-    @MockBean
-    private KafkaTemplate<String, String> kafkaTemplate;
 
     @MockBean
     private org.springframework.mail.javamail.JavaMailSender mailSender;
@@ -52,40 +72,56 @@ class StatusChangeNotificationIntegrationTest {
     @MockBean
     private com.circleguard.notification.service.PushService pushService;
 
+    private void waitForListenerAssignment() {
+        for (MessageListenerContainer container : registry.getListenerContainers()) {
+            ContainerTestUtils.waitForAssignment(container, embeddedKafka.getPartitionsPerTopic());
+        }
+    }
+
     // Integration Test 8: SUSPECT status event dispatches notification and syncs LMS
     @Test
-    void handleStatusChange_suspectStatus_shouldDispatchAndSyncLms() throws Exception {
-        String event = "{\"anonymousId\":\"user-int-001\",\"status\":\"SUSPECT\",\"timestamp\":1234567890}";
+    void handleStatusChange_suspectStatus_shouldDispatchAndSyncLms() {
+        waitForListenerAssignment();
 
         when(emailService.sendAsync(any(), any())).thenReturn(CompletableFuture.completedFuture(null));
         when(smsService.sendAsync(any(), any())).thenReturn(CompletableFuture.completedFuture(null));
         when(pushService.sendAsync(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
 
-        listener.handleStatusChange(event);
+        String event = "{\"anonymousId\":\"user-int-001\",\"status\":\"SUSPECT\",\"timestamp\":1234567890}";
+        kafkaTemplate.send("promotion.status.changed", "user-int-001", event);
 
-        verify(dispatcher).dispatch(eq("user-int-001"), eq("SUSPECT"));
-        verify(lmsService).syncRemoteAttendance(eq("user-int-001"), eq("SUSPECT"));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            verify(dispatcher).dispatch(eq("user-int-001"), eq("SUSPECT"));
+            verify(lmsService).syncRemoteAttendance(eq("user-int-001"), eq("SUSPECT"));
+        });
     }
 
     // Integration Test 9: ACTIVE status event must NOT trigger dispatch (not a risk state)
     @Test
-    void handleStatusChange_activeStatus_shouldNotDispatch() throws Exception {
+    void handleStatusChange_activeStatus_shouldNotDispatch() {
+        waitForListenerAssignment();
+
         String event = "{\"anonymousId\":\"user-int-002\",\"status\":\"ACTIVE\",\"timestamp\":1234567890}";
+        kafkaTemplate.send("promotion.status.changed", "user-int-002", event);
 
-        listener.handleStatusChange(event);
-
-        verify(dispatcher, never()).dispatch(anyString(), anyString());
-        verify(lmsService, never()).syncRemoteAttendance(anyString(), anyString());
+        await().pollDelay(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            verify(dispatcher, never()).dispatch(anyString(), anyString());
+            verify(lmsService, never()).syncRemoteAttendance(anyString(), anyString());
+        });
     }
 
-    // Integration Test 10: malformed JSON should not throw and should not call dispatcher
+    // Integration Test 10: malformed JSON must be swallowed by the listener; dispatcher untouched.
+    // The listener still consumes the record (deserializing as String never fails); failure happens
+    // when ObjectMapper tries to parse it, where the listener's try/catch absorbs it.
     @Test
     void handleStatusChange_malformedJson_shouldNotThrow() {
-        String badEvent = "THIS IS NOT JSON {{{}}}";
+        waitForListenerAssignment();
 
-        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
-                () -> listener.handleStatusChange(badEvent)
+        String badEvent = "THIS IS NOT JSON {{{}}}";
+        kafkaTemplate.send("promotion.status.changed", "bad", badEvent);
+
+        await().pollDelay(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                verify(dispatcher, never()).dispatch(anyString(), anyString())
         );
-        verify(dispatcher, never()).dispatch(anyString(), anyString());
     }
 }

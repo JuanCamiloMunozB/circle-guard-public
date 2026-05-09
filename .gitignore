@@ -46,3 +46,16 @@ web-build/
 *_data/
 pgdata/
 neo4jdata/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Locust outputs
+tests/performance/reports/
+tests/performance/locust-report-*.html
+tests/performance/locust-*.csv
+
+# Generated kubeconfig for the Jenkins container (created by setup-kubeconfig.ps1)
+jenkins/config/.kubeconfig-incontainer

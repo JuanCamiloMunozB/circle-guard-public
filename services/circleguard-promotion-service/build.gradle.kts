@@ -39,4 +39,6 @@ dependencies {
         exclude(group = "org.neo4j", module = "neo4j-slf4j-provider")
     }
     testImplementation("com.h2database:h2")
+    testImplementation("org.springframework.kafka:spring-kafka-test")
+    testImplementation("org.awaitility:awaitility")
 }

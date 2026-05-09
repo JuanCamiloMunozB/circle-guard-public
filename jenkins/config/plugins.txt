@@ -1,0 +1,33 @@
+# Pre-installed Jenkins plugins. Versions are deliberately omitted so the build
+# pulls the latest compatible release for the controller version. Add a `:version`
+# suffix on a line below if you need to pin one.
+
+# --- Pipeline core ---
+workflow-aggregator
+pipeline-stage-view
+timestamper
+ws-cleanup
+
+# --- SCM integrations ---
+git
+github
+github-branch-source
+
+# --- Credentials & secrets ---
+credentials-binding
+plain-credentials
+ssh-credentials
+
+# --- Build reports ---
+junit
+htmlpublisher
+
+# --- Kubernetes deployment ---
+kubernetes-cli
+
+# --- UI quality of life ---
+blueocean
+
+# --- Configuration as Code (loads jenkins/config/casc.yaml on startup) ---
+configuration-as-code
+job-dsl

@@ -1,0 +1,50 @@
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Gradle build outputs (Dockerfiles use multi-stage builds with their own gradle invocation)
+**/build/
+**/.gradle/
+.gradle/
+
+# Environment files (must never enter image layers)
+.env
+.env.*
+
+# IDE and editor metadata
+.idea/
+.vscode/
+*.iml
+.settings/
+.classpath
+.project
+.factorypath
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Project artifacts unrelated to runtime
+docs/
+jenkins/
+k8s/
+tests/
+scratch/
+mobile/
+node_modules/
+
+# Documentation
+*.md
+LICENSE
+
+# Test reports and Locust outputs
+**/test-results/
+**/reports/
+tests/performance/reports/
+tests/performance/locust-*.html
+tests/performance/locust-*.csv

@@ -1,0 +1,56 @@
+# Shared configuration applied per namespace before any service Deployment.
+# All non-secret env vars common to one or more services live in circleguard-config;
+# anything that must not appear in plain text in `kubectl get cm` lives in circleguard-secrets.
+# Apply this file BEFORE k8s/services/ so the Deployments find the references
+# they declare via envFrom.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: circleguard-config
+data:
+  # Database (shared host/credentials; per-service URL is set as a local env on each Deployment)
+  SPRING_DATASOURCE_USERNAME: admin
+
+  # Kafka
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  # Neo4j
+  SPRING_NEO4J_URI: bolt://neo4j:7687
+  SPRING_NEO4J_AUTHENTICATION_USERNAME: neo4j
+
+  # Redis
+  SPRING_DATA_REDIS_HOST: redis
+  SPRING_DATA_REDIS_PORT: "6379"
+
+  # LDAP
+  SPRING_LDAP_URLS: ldap://ldap:389
+  SPRING_LDAP_BASE: dc=circleguard,dc=edu
+  SPRING_LDAP_USERNAME: cn=admin,dc=circleguard,dc=edu
+
+  # SMTP (notification-service)
+  SPRING_MAIL_HOST: smtp.gmail.com
+  SPRING_MAIL_PORT: "587"
+
+  # Inter-service URLs (resolved by Kubernetes DNS)
+  AUTH_API_URL: http://auth-service:8180
+  IDENTITY_API_URL: http://identity-service:8083
+  PROMOTION_API_URL: http://promotion-service:8088
+
+  # Application-specific configuration
+  VAULT_HASH_SALT: circleguard-production-salt-change-me
+  JWT_EXPIRATION: "3600000"
+  QR_EXPIRATION: "300"
+  MANAGEMENT_HEALTH_PROBES_ENABLED: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: circleguard-secrets
+type: Opaque
+stringData:
+  SPRING_DATASOURCE_PASSWORD: password
+  SPRING_NEO4J_AUTHENTICATION_PASSWORD: password
+  SPRING_LDAP_PASSWORD: admin
+  JWT_SECRET: my-super-secret-dev-key-32-chars-long-12345678
+  QR_SECRET: my-qr-secret-key-for-dev-1234567890

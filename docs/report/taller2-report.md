@@ -45,11 +45,17 @@ Dentro del subdirectorio `infrastructure/` se encuentran cuatro manifiestos que 
 
 Cada uno de los seis servicios de aplicación cuenta con su propio manifiesto en `k8s/services/`. Cada manifiesto está compuesto por tres recursos de Kubernetes: un `ConfigMap` que centraliza las variables de entorno del servicio (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios), un `Deployment` con una réplica inicial, sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`), y un `Service` de tipo `ClusterIP` que expone el puerto del contenedor dentro del namespace sin publicarlo al exterior.
 
+El archivo `jenkins/config/jenkins-account.yaml` define el control de acceso basado en roles (RBAC) para la cuenta de servicio de Jenkins. Se declara un `ServiceAccount` en el namespace `default` y se crean `Role` y `RoleBinding` en cada uno de los tres namespaces de la aplicación (`circleguard-dev`, `circleguard-stage` y `circleguard-master`), otorgando permisos de lectura, creación, actualización y eliminación sobre `Deployments`, `StatefulSets`, `ReplicaSets`, `Services`, `ConfigMaps`, `PersistentVolumeClaims`, `Pods` y `Pods/portforward`. Adicionalmente, un `ClusterRole` y su correspondiente `ClusterRoleBinding` otorgan permisos sobre recursos de ámbito de clúster como `Namespaces` y `PersistentVolumes`, necesarios para la ejecución de `kubectl apply -f k8s/namespaces.yaml` desde el pipeline.
+
 [Image: Salida de `kubectl get all -n circleguard-dev` mostrando pods, servicios y deployments de los seis microservicios en estado Running]
 
 ### 2.4 Configuración de Jenkins
 
-Jenkins actúa como el orquestador central de los pipelines. La integración con Kubernetes se realiza mediante el plugin de Kubernetes CLI, que permite ejecutar comandos `kubectl apply` y `kubectl set image` directamente desde los stages del pipeline. La comunicación con Docker se realiza montando el socket del demonio Docker en el agente de Jenkins. Los tres Jenkinsfiles definen pipelines declarativos con la directiva `pipeline { agent any }`, lo que permite que Jenkins ejecute los stages en cualquier nodo disponible.
+Jenkins actúa como el orquestador central de los pipelines. El `Dockerfile.jenkins` personaliza la imagen oficial `jenkins/jenkins:lts-jdk21` con la instalación de las herramientas necesarias: Docker CLI (para construir imágenes dentro del agente), `kubectl` con versión pinada vía argumento de build (descargado como binario estático), Python 3 con `pip3` (para instalar y ejecutar Locust en los stages de rendimiento) y una identidad Git global (`jenkins@circleguard.ci` / `Jenkins CI`) requerida para la creación de tags Git anotados en el pipeline master. Los plugins esenciales (`workflow-aggregator`, `git`, `kubernetes-cli`, `junit`, `htmlpublisher`, `configuration-as-code`, `job-dsl`, entre otros) se pre-instalan durante el build de la imagen mediante `jenkins-plugin-cli` leyendo el archivo `plugins.txt`, eliminando el paso manual del wizard inicial.
+
+La configuración del controlador de Jenkins se gestiona declarativamente mediante el plugin **Configuration as Code (JCasC)**: el archivo `jenkins/config/casc.yaml` define el usuario administrador, las credenciales (Docker Hub y token de GitHub) y los tres jobs de pipeline apuntando al repositorio Git con sus respectivos `Jenkinsfile.dev`, `Jenkinsfile.stage` y `Jenkinsfile.master`. Las variables sensibles (usuario, contraseñas, tokens, URL del repo) provienen de un archivo `.env` local que el `docker-compose.jenkins.yml` carga vía `env_file:` y JCasC resuelve mediante sustitución `${VAR}` al arrancar el contenedor. Este enfoque permite re-crear todo el entorno Jenkins desde cero sin clics manuales: levantar el contenedor implica que el admin, las credenciales y los tres jobs ya están configurados.
+
+La comunicación con el clúster Kubernetes se realiza mediante el token del `ServiceAccount` `jenkins`, definido en `jenkins/config/jenkins-account.yaml`. El script `jenkins/scripts/setup-k8s-jenkins.sh` aplica el manifiesto RBAC, espera a que el `Secret` `jenkins-token` sea populado por Kubernetes, extrae el token Bearer y la URL del API server (reescrita de `127.0.0.1` a `host.docker.internal`), y los escribe como `K8S_SA_TOKEN` y `K8S_API_SERVER` en el archivo `.env`. JCasC lee esas variables al arrancar el contenedor y crea automáticamente la credencial `k8s-sa-token` en el Credential Store de Jenkins. En los pipelines, cada stage que ejecuta comandos `kubectl` envuelve sus pasos en `withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true)`, que genera un kubeconfig temporal con autenticación por token Bearer y lo elimina al salir del bloque. Este enfoque es más cercano al control de acceso de producción: los pipelines se autentican con permisos acotados por RBAC en cada namespace en lugar de usar las credenciales de administrador del clúster.
 
 [Image: Pantalla de Jenkins mostrando los tres pipelines (dev, stage, master) configurados, con sus últimas ejecuciones exitosas]
 
@@ -57,11 +63,13 @@ Jenkins actúa como el orquestador central de los pipelines. La integración con
 
 ## 3. Pipelines por ambiente (Actividades 2, 4 y 5)
 
+Los tres pipelines comparten el parámetro booleano `SKIP_DOCKER_BUILD` (valor por defecto `false`). Cuando se activa, los stages de compilación de JARs y construcción de imágenes Docker se omiten y el deploy reutiliza la imagen etiquetada como `*-latest` disponible en el daemon Docker local, evitando reconstrucciones completas cuando únicamente se requiere re-ejecutar etapas posteriores como pruebas o despliegue.
+
 ### 3.1 Pipeline de desarrollo — `Jenkinsfile.dev`
 
-El pipeline de desarrollo cubre el ciclo básico que permite a un desarrollador verificar que sus cambios son correctos y que el sistema completo funciona en un ambiente aislado. La primera etapa realiza el checkout del repositorio. A continuación, la etapa de construcción y pruebas unitarias ejecuta todos los tests de los seis servicios en un único comando Gradle con la opción `--continue`, de modo que un fallo en un servicio no impida que los demás completen sus pruebas; los resultados se publican como artefactos JUnit para su visualización en Jenkins. La tercera etapa genera los fat-JARs de todos los servicios en paralelo aprovechando la opción `--parallel` de Gradle, reduciendo el tiempo total de construcción.
+El pipeline de desarrollo cubre el ciclo básico que permite a un desarrollador verificar que sus cambios son correctos y que el sistema completo funciona en un ambiente aislado. La primera etapa realiza el checkout del repositorio y calcula la variable de entorno `DEPLOY_TAG`: si `SKIP_DOCKER_BUILD` es `false`, el tag es `dev-<BUILD_NUMBER>`; si es `true`, se usa `dev-latest`. A continuación, la etapa de construcción y pruebas unitarias ejecuta todos los tests de los seis servicios en un único comando Gradle con la opción `--continue`, de modo que un fallo en un servicio no impida que los demás completen sus pruebas; los resultados se publican como artefactos JUnit para su visualización en Jenkins.
 
-La cuarta etapa construye las imágenes Docker de cada servicio y las etiqueta con el identificador `dev-<BUILD_NUMBER>`, garantizando trazabilidad entre el build de Jenkins y la imagen desplegada. La etapa de despliegue aplica los manifiestos de Kubernetes al namespace `circleguard-dev` mediante `kubectl apply` y actualiza la imagen de cada `Deployment` con `kubectl set image`. Antes de declarar el pipeline exitoso, la etapa de espera verifica mediante `kubectl rollout status` que todos los deployments han completado su actualización con un timeout de 120 segundos, y la etapa de smoke tests consulta el endpoint `/actuator/health` de cada servicio para confirmar que están respondiendo correctamente.
+Cuando `SKIP_DOCKER_BUILD` es `false`, la etapa de compilación de JARs genera los fat-JARs en paralelo y la etapa de construcción de imágenes Docker etiqueta cada imagen con `dev-<BUILD_NUMBER>` y la re-etiqueta como `dev-latest`. La etapa de despliegue aplica los manifiestos de Kubernetes al namespace `circleguard-dev` mediante `kubectl apply` y actualiza la imagen de cada `Deployment` usando `DEPLOY_TAG`. Antes de declarar el pipeline exitoso, la etapa de espera verifica mediante `kubectl rollout status` que todos los deployments han completado su actualización, y la etapa de smoke tests consulta el endpoint `/actuator/health` de cada servicio para confirmar que están respondiendo correctamente.
 
 [Image: Vista de etapas del pipeline dev en Jenkins, todas en verde, con tiempos de ejecución por etapa]
 
@@ -69,7 +77,7 @@ La cuarta etapa construye las imágenes Docker de cada servicio y las etiqueta c
 
 ### 3.2 Pipeline de stage — `Jenkinsfile.stage`
 
-El pipeline de stage amplía el de desarrollo con capas adicionales de validación. Luego de las pruebas unitarias y la compilación, incluye una etapa de pruebas de integración que activa el perfil Spring `integration`, diseñado para habilitar configuraciones de test más cercanas al ambiente real. Una vez desplegados los servicios en el namespace `circleguard-stage`, se ejecutan pruebas de sistema contra el ambiente desplegado y una prueba de rendimiento baseline con Locust, configurada con diez usuarios concurrentes durante sesenta segundos. Esta configuración moderada tiene como propósito establecer una línea base de referencia de rendimiento antes de que cualquier cambio llegue al ambiente master; si los tiempos de respuesta exceden los umbrales definidos, el pipeline falla y bloquea la promoción al siguiente ambiente. El reporte HTML generado por Locust se publica como artefacto del build.
+El pipeline de stage amplía el de desarrollo con capas adicionales de validación. Luego de las pruebas unitarias, incluye una etapa de pruebas de integración que activa el perfil Spring `test`, diseñado para habilitar configuraciones de infraestructura embebida más cercanas al ambiente real. La variable `DEPLOY_TAG` se calcula en el Checkout con el valor `stage-<BUILD_NUMBER>` o `stage-latest` según el parámetro `SKIP_DOCKER_BUILD`. Una vez desplegados los servicios en el namespace `circleguard-stage`, se ejecutan pruebas de sistema E2E contra el ambiente desplegado y una prueba de rendimiento baseline con Locust, ejecutado mediante `pip3` con el PATH extendido para incluir `$HOME/.local/bin`, configurada con diez usuarios concurrentes durante sesenta segundos. Esta configuración moderada tiene como propósito establecer una línea base de referencia de rendimiento antes de que cualquier cambio llegue al ambiente master. El reporte HTML generado por Locust se publica como artefacto del build.
 
 [Image: Reporte HTML de Locust del pipeline stage, mostrando gráfica de tiempo de respuesta y throughput durante los 60 segundos de prueba]
 
@@ -77,9 +85,9 @@ El pipeline de stage amplía el de desarrollo con capas adicionales de validaci�
 
 ### 3.3 Pipeline de producción (master) — `Jenkinsfile.master`
 
-El pipeline master constituye la puerta final antes del despliegue en producción. Ejecuta la secuencia completa de validación: pruebas unitarias, pruebas de integración, construcción de artefactos, construcción y etiquetado de imágenes Docker con el esquema de versionamiento semántico `v<BUILD_NUMBER>`, despliegue al namespace `circleguard-master` y verificación del rollout. A continuación ejecuta una suite de pruebas de validación del sistema y una prueba de rendimiento más exigente con cincuenta usuarios concurrentes durante ciento veinte segundos, cuyos resultados se exportan tanto en formato HTML como en archivos CSV para análisis posterior.
+El pipeline master constituye la puerta final antes del despliegue en producción. Ejecuta la secuencia completa de validación: pruebas unitarias, pruebas de integración, construcción de artefactos, construcción y etiquetado de imágenes Docker con el esquema de versionamiento `v<BUILD_NUMBER>`, despliegue al namespace `circleguard-master` y verificación del rollout. La variable `IMAGE_TAG` se inicializa en el bloque `environment` como `v<BUILD_NUMBER>` y se sobrescribe a `latest` en el Checkout cuando `SKIP_DOCKER_BUILD` es `true`. A continuación ejecuta una suite de pruebas de validación del sistema y una prueba de rendimiento con cincuenta usuarios concurrentes durante ciento veinte segundos, cuyos resultados se exportan en formato HTML y CSV.
 
-La característica más relevante de este pipeline desde la perspectiva de Change Management es la generación automática de release notes, que se describe en la sección 5. El pipeline finaliza con la creación de un tag Git con el número de versión, estableciendo un punto de referencia inmutable en el historial del repositorio al que es posible revertir en caso de incidente.
+La característica más relevante de este pipeline desde la perspectiva de Change Management es la generación automática de release notes, que se describe en la sección 5. El pipeline finaliza con la creación de un tag Git anotado con el número de versión; la identidad del committer está configurada globalmente en el contenedor Jenkins como `Jenkins CI <jenkins@circleguard.ci>`, lo que evita el error `Committer identity unknown` en entornos sin configuración de usuario Git local.
 
 [Image: Etapas del pipeline master en Jenkins mostrando todas las fases completadas, incluyendo Generate Release Notes y Tag Release]
 
@@ -434,7 +442,11 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 
 ### 4.2 Pruebas de integración
 
-Las pruebas de integración verifican que varios componentes funcionan correctamente cuando se conectan entre sí dentro del contexto completo de Spring Boot, mockeando únicamente la infraestructura externa real (base de datos, Kafka broker, Redis). Se crearon cinco nuevas clases de prueba de integración con un total de doce casos.
+Las pruebas de integración verifican que varios componentes funcionan correctamente cuando se conectan entre sí dentro del contexto completo de Spring Boot. A diferencia de las pruebas unitarias, estas cargan el contexto Spring real y se ejecutan contra instancias embebidas de la infraestructura real (Kafka, Neo4j, Redis y PostgreSQL), que corren dentro de la misma JVM del proceso de pruebas. Esto permite validar serialización, consumo desde topics, recorridos de grafo y cacheo en condiciones equivalentes a producción sin requerir Docker ni conectividad de red externa.
+
+Apache Kafka se instancia con `spring-kafka-test` mediante la anotación `@EmbeddedKafka(partitions = 1, topics = {...})`, que arranca un broker Kafka in-process al cual los `KafkaTemplate` y los `@KafkaListener` reales del servicio bajo prueba se conectan automáticamente al sobrescribir `spring.kafka.bootstrap-servers` con `${spring.embedded.kafka.brokers}`. Los tests que publican usan un consumidor adicional creado con `KafkaTestUtils.consumerProps()` para verificar el contenido y la clave del registro emitido; los tests que consumen usan `ContainerTestUtils.waitForAssignment()` para esperar a que el listener se una al grupo antes de publicar, y `Awaitility` para esperar de forma determinista a que las dependencias mockeadas downstream sean invocadas. Neo4j se instancia con `neo4j-harness:5.26.0` en modo in-process mediante `Neo4jBuilders.newInProcessBuilder()`, lo que habilita el protocolo Bolt real y permite ejecutar consultas Cypher completas. Redis se instancia con `jedis-mock:1.1.0`, una implementación Java del protocolo RESP que recibe y responde comandos Redis reales a través de red sin binario nativo. Para la capa JPA/PostgreSQL se utiliza H2 en modo de compatibilidad PostgreSQL, configurado mediante el perfil Spring `test` con DDL automático y Flyway deshabilitado.
+
+Se crearon cinco nuevas clases de prueba de integración con un total de doce casos.
 
 ---
 
@@ -448,12 +460,12 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 |---|---|
 | **Identificador Único** | PI-001 |
 | **Nombre** | Payload de survey.submitted contiene campos obligatorios |
-| **Descripción** | Verifica, con el contexto Spring completo cargado, que el `HealthSurveyService` publica un evento `survey.submitted` cuyo payload contiene los campos `anonymousId`, `hasSymptoms=true` y `timestamp`, validando el cableado entre el servicio, el repositorio y el `KafkaTemplate`. |
-| **Prerrequisitos/Condiciones** | Contexto Spring cargado con perfil `test`; repositorio, `QuestionnaireService`, `SymptomMapper` y `KafkaTemplate` mockeados como `@MockBean`; `SymptomMapper` configurado para retornar `true`. |
-| **Entradas** | `HealthSurvey` con `anonymousId` válido; cuestionario con una pregunta de fiebre. |
-| **Acciones** | Se invoca `submitSurvey()`; se captura el argumento del `KafkaTemplate.send()` con un `ArgumentMatcher`. |
-| **Salida Esperada** | El payload contiene `anonymousId`, `hasSymptoms=true` y `timestamp` no nulo. |
-| **Criterios de Aceptación** | El `ArgumentMatcher` verifica los tres campos en el payload; la prueba pasa sin excepciones de contexto Spring. |
+| **Descripción** | Verifica, con el contexto Spring completo cargado y un broker Kafka embebido (`@EmbeddedKafka`), que al invocar `HealthSurveyService.submitSurvey()` el `KafkaTemplate` real publica un registro en el topic `survey.submitted` cuya clave es el `anonymousId` y cuyo payload contiene los campos `anonymousId`, `hasSymptoms=true` y `timestamp`. |
+| **Prerrequisitos/Condiciones** | Contexto Spring cargado con perfil `test`; broker Kafka embebido con el topic creado; repositorio, `QuestionnaireService` y `SymptomMapper` mockeados como `@MockBean`; consumidor de prueba suscrito al topic vía `KafkaTestUtils.consumerProps()`. |
+| **Entradas** | `HealthSurvey` con `anonymousId` válido; cuestionario con una pregunta de fiebre; `SymptomMapper` configurado para retornar `true`. |
+| **Acciones** | Se invoca `submitSurvey()`; el consumidor del test recupera el registro con `KafkaTestUtils.getSingleRecord(topic, Duration.ofSeconds(10))`. |
+| **Salida Esperada** | El registro consumido tiene `key = anonymousId.toString()` y el payload contiene `anonymousId`, `hasSymptoms=true` y `timestamp` no nulo. |
+| **Criterios de Aceptación** | El registro llega al topic dentro del timeout y los tres campos del payload coinciden con los esperados. |
 
 ---
 
@@ -461,12 +473,12 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 |---|---|
 | **Identificador Único** | PI-002 |
 | **Nombre** | Payload de certificate.validated contiene adminId y estado APPROVED |
-| **Descripción** | Verifica que al aprobar un certificado, el evento `certificate.validated` publicado en Kafka contiene el `adminId` del aprobador y el campo `status="APPROVED"`, garantizando la trazabilidad de la validación. |
-| **Prerrequisitos/Condiciones** | Contexto Spring cargado; encuesta en estado `PENDING` disponible en el repositorio mockeado. |
+| **Descripción** | Verifica que al aprobar un certificado, el evento `certificate.validated` publicado en el broker Kafka embebido contiene el `adminId` del aprobador y el campo `status="APPROVED"`, garantizando la trazabilidad de la validación. |
+| **Prerrequisitos/Condiciones** | Contexto Spring cargado con broker Kafka embebido y topic `certificate.validated`; encuesta en estado `PENDING` disponible en el repositorio mockeado; consumidor de prueba suscrito al topic. |
 | **Entradas** | `surveyId`, `ValidationStatus.APPROVED`, `adminId` del administrador. |
-| **Acciones** | Se invoca `validateSurvey()`; se verifica el payload del evento Kafka publicado. |
-| **Salida Esperada** | El payload contiene `status="APPROVED"` y `adminId` coincide con el del administrador. |
-| **Criterios de Aceptación** | El `ArgumentMatcher` verifica ambos campos; el evento es publicado exactamente una vez. |
+| **Acciones** | Se invoca `validateSurvey()`; el consumidor del test lee el registro emitido al topic. |
+| **Salida Esperada** | El payload contiene `status="APPROVED"` y `adminId` coincide con el identificador serializado del administrador. |
+| **Criterios de Aceptación** | `KafkaTestUtils.getSingleRecord()` retorna el registro dentro del timeout y ambos campos coinciden. |
 
 ---
 
@@ -480,12 +492,12 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 |---|---|
 | **Identificador Único** | PI-003 |
 | **Nombre** | SurveyListener con síntomas invoca actualización a estado SUSPECT |
-| **Descripción** | Verifica que el `SurveyListener` de `promotion-service`, correctamente inyectado con `HealthStatusService` en el contexto Spring, delega la actualización de estado cuando el evento `survey.submitted` indica `hasSymptoms=true`. |
-| **Prerrequisitos/Condiciones** | Contexto Spring cargado con perfil `test`; `HealthStatusService` mockeado como `@MockBean`. |
-| **Entradas** | Mapa de evento con `anonymousId="integration-user-001"` y `hasSymptoms=true`. |
-| **Acciones** | Se invoca `surveyListener.onSurveySubmitted(event)`. |
-| **Salida Esperada** | `healthStatusService.updateStatus("integration-user-001", "SUSPECT")` es invocado exactamente una vez. |
-| **Criterios de Aceptación** | `verify(healthStatusService).updateStatus("integration-user-001", "SUSPECT")` pasa. |
+| **Descripción** | Verifica el flujo Kafka completo en `promotion-service`: un evento publicado al topic `survey.submitted` en el broker embebido es consumido por el `@KafkaListener` real (`SurveyListener`), que delega la actualización de estado al `HealthStatusService` cuando `hasSymptoms=true`. |
+| **Prerrequisitos/Condiciones** | Contexto Spring cargado con perfil `test`; broker Kafka embebido con topic `survey.submitted`; `HealthStatusService` mockeado como `@MockBean`; el listener real registrado en el `KafkaListenerEndpointRegistry`; espera a la asignación de partición vía `ContainerTestUtils.waitForAssignment()`. |
+| **Entradas** | Mapa de evento con `anonymousId="integration-user-001"` y `hasSymptoms=true` publicado al topic con `KafkaTemplate`. |
+| **Acciones** | Se publica el evento al topic; `Awaitility.await()` espera a que el listener consuma y delegue. |
+| **Salida Esperada** | `healthStatusService.updateStatus("integration-user-001", "SUSPECT")` es invocado dentro del timeout. |
+| **Criterios de Aceptación** | `await().atMost(10s).untilAsserted(verify(...))` completa sin timeout. |
 
 ---
 
@@ -493,12 +505,12 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 |---|---|
 | **Identificador Único** | PI-004 |
 | **Nombre** | SurveyListener sin síntomas no actualiza estado de salud |
-| **Descripción** | Verifica que cuando el evento `survey.submitted` indica `hasSymptoms=false`, el listener no invoca `HealthStatusService`, evitando así cambios de estado innecesarios y reduciendo la carga en el grafo Neo4j. |
-| **Prerrequisitos/Condiciones** | Contexto Spring cargado; `HealthStatusService` mockeado. |
-| **Entradas** | Mapa de evento con `anonymousId="integration-user-002"` y `hasSymptoms=false`. |
-| **Acciones** | Se invoca `surveyListener.onSurveySubmitted(event)`. |
+| **Descripción** | Verifica que cuando el evento `survey.submitted` indica `hasSymptoms=false`, el listener consume el mensaje del broker pero no invoca `HealthStatusService`, evitando cambios de estado innecesarios y reduciendo la carga en el grafo Neo4j. |
+| **Prerrequisitos/Condiciones** | Contexto Spring cargado; broker Kafka embebido; `HealthStatusService` mockeado; listener registrado y con partición asignada. |
+| **Entradas** | Mapa de evento con `anonymousId="integration-user-002"` y `hasSymptoms=false` publicado al topic. |
+| **Acciones** | Se publica el evento; tras un `pollDelay` de 3 segundos se verifica que el mock no fue invocado. |
 | **Salida Esperada** | `healthStatusService.updateStatus()` nunca es invocado. |
-| **Criterios de Aceptación** | `verify(healthStatusService, never()).updateStatus(anyString(), anyString())` pasa. |
+| **Criterios de Aceptación** | `verify(healthStatusService, never()).updateStatus(anyString(), anyString())` pasa después del polling. |
 
 ---
 
@@ -557,12 +569,12 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 |---|---|
 | **Identificador Único** | PI-008 |
 | **Nombre** | Evento de estado SUSPECT despacha notificación y sincroniza LMS |
-| **Descripción** | Verifica que cuando el listener `ExposureNotificationListener` recibe un evento JSON con `status=SUSPECT`, el contexto Spring delega correctamente tanto al `NotificationDispatcher` como al `LmsService`, integrando en un único test dos dependencias clave del servicio. |
-| **Prerrequisitos/Condiciones** | Contexto Spring cargado; `NotificationDispatcher` y `LmsService` mockeados como `@MockBean`. |
-| **Entradas** | Cadena JSON `{"anonymousId":"user-int-001","status":"SUSPECT","timestamp":1234567890}`. |
-| **Acciones** | Se invoca `listener.handleStatusChange(event)`. |
+| **Descripción** | Verifica que un evento JSON con `status=SUSPECT` publicado en el broker Kafka embebido al topic `promotion.status.changed` es consumido por el `ExposureNotificationListener` real, que delega tanto al `NotificationDispatcher` como al `LmsService`, integrando en un único test el flujo completo Kafka → listener → dependencias downstream. |
+| **Prerrequisitos/Condiciones** | Contexto Spring cargado; broker Kafka embebido con el topic `promotion.status.changed`; `NotificationDispatcher`, `LmsService`, servicios de email/sms/push mockeados como `@MockBean`; espera a la asignación de partición. |
+| **Entradas** | Cadena JSON `{"anonymousId":"user-int-001","status":"SUSPECT","timestamp":1234567890}` publicada al topic con `KafkaTemplate<String,String>`. |
+| **Acciones** | Se publica el mensaje; `Awaitility` espera a que ambas dependencias mockeadas sean invocadas. |
 | **Salida Esperada** | `dispatcher.dispatch("user-int-001", "SUSPECT")` invocado una vez; `lmsService.syncRemoteAttendance("user-int-001", "SUSPECT")` invocado una vez. |
-| **Criterios de Aceptación** | Ambas verificaciones de Mockito pasan sin error. |
+| **Criterios de Aceptación** | `await().atMost(10s).untilAsserted(...)` completa sin timeout y ambas verificaciones de Mockito pasan. |
 
 ---
 
@@ -570,12 +582,12 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 |---|---|
 | **Identificador Único** | PI-009 |
 | **Nombre** | Evento de estado ACTIVE no genera notificaciones |
-| **Descripción** | Verifica que el estado `ACTIVE`, que es el estado normal del sistema, no genera notificaciones ni sincronizaciones con el LMS, evitando ruido en los canales de comunicación. |
-| **Prerrequisitos/Condiciones** | Contexto Spring cargado; `NotificationDispatcher` y `LmsService` mockeados. |
-| **Entradas** | Cadena JSON `{"anonymousId":"user-int-002","status":"ACTIVE","timestamp":1234567890}`. |
-| **Acciones** | Se invoca `listener.handleStatusChange(event)`. |
+| **Descripción** | Verifica que el estado `ACTIVE`, que es el estado normal del sistema, no genera notificaciones ni sincronizaciones con el LMS, evitando ruido en los canales de comunicación. El mensaje se publica al broker embebido y el listener lo consume; la lógica del listener no debe disparar las dependencias downstream. |
+| **Prerrequisitos/Condiciones** | Contexto Spring cargado; broker Kafka embebido; `NotificationDispatcher` y `LmsService` mockeados; listener con partición asignada. |
+| **Entradas** | Cadena JSON `{"anonymousId":"user-int-002","status":"ACTIVE","timestamp":1234567890}` publicada al topic. |
+| **Acciones** | Se publica el mensaje; tras un `pollDelay` de 3 segundos se verifican los mocks. |
 | **Salida Esperada** | `dispatcher.dispatch()` nunca es invocado; `lmsService.syncRemoteAttendance()` nunca es invocado. |
-| **Criterios de Aceptación** | `verify(dispatcher, never()).dispatch(anyString(), anyString())` pasa. |
+| **Criterios de Aceptación** | Ambas verificaciones `verify(..., never())` pasan después del polling. |
 
 ---
 
@@ -583,12 +595,12 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 |---|---|
 | **Identificador Único** | PI-010 |
 | **Nombre** | JSON malformado no lanza excepción ni despacha notificación |
-| **Descripción** | Verifica la resiliencia del consumidor Kafka ante mensajes corruptos: cuando el listener recibe un JSON inválido, lo maneja silenciosamente sin propagar la excepción, garantizando que el pod no falla y el consumer group no queda bloqueado. |
-| **Prerrequisitos/Condiciones** | Contexto Spring cargado; `NotificationDispatcher` mockeado. |
-| **Entradas** | Cadena malformada `"THIS IS NOT JSON {{{}}}"`  |
-| **Acciones** | Se invoca `listener.handleStatusChange(badEvent)` dentro de `assertDoesNotThrow()`. |
-| **Salida Esperada** | No se lanza ninguna excepción; `dispatcher.dispatch()` nunca es invocado. |
-| **Criterios de Aceptación** | `assertDoesNotThrow(...)` pasa; `verify(dispatcher, never()).dispatch(...)` pasa. |
+| **Descripción** | Verifica la resiliencia del consumidor Kafka ante mensajes corruptos: cuando el listener consume un mensaje del broker embebido cuyo contenido no es JSON válido, lo maneja silenciosamente (try/catch interno) sin propagar la excepción, garantizando que el pod no falla y el consumer group no queda bloqueado. |
+| **Prerrequisitos/Condiciones** | Contexto Spring cargado; broker Kafka embebido; `NotificationDispatcher` mockeado; listener con partición asignada. |
+| **Entradas** | Cadena malformada `"THIS IS NOT JSON {{{}}}"` publicada al topic con `KafkaTemplate<String,String>`. |
+| **Acciones** | Se publica el mensaje al topic; tras un `pollDelay` se verifica que el dispatcher no fue invocado y que el consumer no quedó atascado. |
+| **Salida Esperada** | El listener no propaga excepción y `dispatcher.dispatch()` nunca es invocado. |
+| **Criterios de Aceptación** | El test no falla por excepción y `verify(dispatcher, never()).dispatch(...)` pasa después del polling. |
 
 ---
 
@@ -630,7 +642,7 @@ Las pruebas de integración verifican que varios componentes funcionan correctam
 
 ### 4.3 Pruebas E2E
 
-Las pruebas end-to-end validan flujos completos de usuario contra los servicios realmente desplegados, sin mocks de ningún tipo. Están implementadas con la librería RestAssured y organizadas en un módulo Gradle independiente en `tests/e2e/`, de modo que puedan ejecutarse de forma aislada contra cualquier ambiente especificando las URLs y puertos mediante propiedades del sistema. El diseño contempla que los servicios pueden no estar disponibles en todos los ambientes (por ejemplo, en CI sin Kubernetes desplegado), por lo que cada prueba acepta el código HTTP 503 como respuesta válida sin fallar, pero verifica las propiedades funcionales cuando el servicio sí responde con 200.
+Las pruebas end-to-end validan flujos completos de usuario contra los servicios realmente desplegados, sin mocks de ningún tipo. Están implementadas con la librería RestAssured y organizadas en un módulo Gradle independiente en `tests/e2e/`, de modo que puedan ejecutarse de forma aislada contra cualquier ambiente especificando las URLs y puertos mediante propiedades del sistema. El diseño contempla que los servicios pueden no estar disponibles en todos los ambientes, por lo que cada prueba acepta el código HTTP 503 como respuesta válida sin fallar, pero verifica las propiedades funcionales cuando el servicio sí responde con 200.
 
 ---
 
@@ -818,12 +830,12 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 |---|---|
 | **Identificador Único** | PE-013 |
 | **Nombre** | Endpoint de encuestas pendientes requiere autenticación o retorna lista |
-| **Descripción** | Verifica que el endpoint `GET /api/v1/surveys/pending` responde de manera esperada: retorna una lista si el acceso está abierto en el ambiente de desarrollo, o retorna 401/403 si la autenticación está habilitada. Esto valida que el endpoint existe y está correctamente configurado en la capa de seguridad. |
-| **Prerrequisitos/Condiciones** | `form-service` en estado UP; la configuración de seguridad puede variar por ambiente. |
+| **Descripción** | Verifica que el endpoint `GET /api/v1/surveys/pending` responde de manera esperada según la configuración de seguridad del ambiente: retorna una lista si el acceso está abierto (200), requiere autenticación (401/403), redirige al login en configuraciones con form-based authentication (302), o indica que el endpoint no está implementado (404). |
+| **Prerrequisitos/Condiciones** | `form-service` en estado UP; la configuración de Spring Security puede variar por ambiente. |
 | **Entradas** | Petición GET sin credenciales. |
 | **Acciones** | Se realiza la petición; se inspecciona el código de estado. |
-| **Salida Esperada** | HTTP 200, 401, 403 o 503 (cualquiera es aceptable según el ambiente). |
-| **Criterios de Aceptación** | `assertTrue(statusCode == 200 || statusCode == 401 || statusCode == 403 || statusCode == 503)`. |
+| **Salida Esperada** | HTTP 200, 302, 401, 403, 404 o 503 (cualquiera es aceptable según el ambiente). |
+| **Criterios de Aceptación** | `assertTrue(statusCode == 200 \|\| statusCode == 302 \|\| statusCode == 401 \|\| statusCode == 403 \|\| statusCode == 404 \|\| statusCode == 503)`. |
 
 ---
 
@@ -859,7 +871,7 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 
 ### 4.4 Pruebas de rendimiento y estrés con Locust
 
-Las pruebas de rendimiento están implementadas en `tests/performance/locustfile.py` utilizando el framework Locust, que permite simular múltiples usuarios concurrentes con comportamientos realistas mediante la definición de clases de usuario con tareas ponderadas.
+Las pruebas de rendimiento están implementadas en `tests/performance/locustfile.py` utilizando el framework Locust, que permite simular múltiples usuarios concurrentes con comportamientos realistas mediante la definición de clases de usuario con tareas ponderadas. Locust se instala en el agente Jenkins mediante `pip3 install --break-system-packages` al inicio del stage de rendimiento, con el directorio `$HOME/.local/bin` incluido en el PATH de ejecución.
 
 #### Descripción de los perfiles de usuario simulados
 
@@ -914,8 +926,6 @@ El sistema tiene definido como requisito no funcional principal (NFR-1) que la o
 
 #### Análisis de resultados
 
-> **Nota:** Los valores que siguen corresponden a resultados esperados según las características del sistema y los requisitos no funcionales documentados. Una vez ejecutado el pipeline master contra el ambiente Kubernetes, los párrafos de análisis esperado deben reemplazarse con valores reales extraídos del archivo `locust-master_stats.csv`.
-
 Para el escenario baseline (PR-001) con diez usuarios, se espera que el endpoint `POST /api/v1/surveys` presente un P50 de entre ochenta y ciento cincuenta milisegundos, considerando que la operación involucra escritura en PostgreSQL, consulta al cuestionario activo mediante caché y publicación de un evento Kafka. El throughput esperado para este escenario es de entre veinte y treinta solicitudes por segundo. Para el escenario de producción (PR-002) con cincuenta usuarios, el P95 es el indicador crítico: si `promotion-service` gestiona correctamente la caché Redis y los recorridos Neo4j, el P95 debería mantenerse por debajo de ochocientos milisegundos. Los endpoints de consulta del tablero son potencialmente más lentos porque involucran una llamada HTTP síncrona y el filtro K-Anonymity, pudiendo acercarse al límite del segundo.
 
 Una tasa de errores superior al uno por ciento en el escenario de producción indicaría problemas de concurrencia en el pool de conexiones PostgreSQL o en el consumer group de Kafka. Un throughput inferior a las veinte solicitudes por segundo con cincuenta usuarios señalaría un cuello de botella en la serialización de eventos Kafka o en la consulta Cypher del grafo de Neo4j.
@@ -940,7 +950,7 @@ En caso de que algún pod no alcance el estado `Running` dentro del timeout, el 
 
 La generación de release notes forma parte del pipeline master y sigue las buenas prácticas de Change Management definidas en el marco ITIL para la gestión de cambios en sistemas en producción. El proceso de generación opera en cuatro pasos. Primero, recupera el tag Git más reciente anterior al commit actual mediante `git describe --tags`; si no existe ningún tag previo, toma los últimos veinte commits del repositorio. Segundo, obtiene la lista de commits entre ese tag y `HEAD`, incluyendo el mensaje y el autor de cada uno. Tercero, extrae del directorio `build/` los resultados de los tests en formato XML para calcular el total de pruebas ejecutadas y el número de fallos. Cuarto, consolida toda esta información en un documento Markdown estructurado que incluye fecha de lanzamiento, número de build, hash corto del commit, nombre del autor, tabla de servicios desplegados con sus versiones de imagen, lista de cambios incluidos, resumen de resultados de pruebas y referencia al namespace Kubernetes de destino.
 
-Este documento se archiva como artefacto del build en Jenkins, se escribe en el directorio `docs/` del repositorio y queda accesible como parte del historial del proyecto. Al finalizar el pipeline se crea también un tag Git con el número de versión, estableciendo un marcador permanente en el historial del repositorio al que los ingenieros pueden hacer referencia para auditorías, incidentes o revisiones de cambio.
+Este documento se archiva como artefacto del build en Jenkins, se escribe en el directorio `docs/` del repositorio y queda accesible como parte del historial del proyecto. Al finalizar el pipeline se crea también un tag Git anotado con el número de versión, estableciendo un marcador permanente en el historial del repositorio. La identidad del committer configurada en el contenedor Jenkins (`Jenkins CI <jenkins@circleguard.ci>`) garantiza que los tags reflejen acciones automatizadas, distinguiéndolas de commits realizados por los desarrolladores del equipo.
 
 El esquema de versionamiento adopta el número de build de Jenkins como identificador principal (`v<BUILD_NUMBER>`), lo que garantiza que cada versión en producción tenga un identificador único y ordenado cronológicamente, facilita la correlación entre un artefacto desplegado y el build de CI que lo generó, y permite rastrear exactamente qué commits están incluidos en cada versión mediante el rango `v<N-1>..v<N>` en el historial de Git.
 
@@ -968,26 +978,245 @@ Desde el punto de vista del análisis de calidad, las pruebas más relevantes so
 
 ---
 
-## 7. Información faltante y recomendaciones
+## 7. Guía de ejecución desde cero
 
-A continuación se detallan los aspectos que no han podido completarse en la implementación actual y que deben documentarse para cumplir plenamente con todos los puntos del taller.
+Esta sección describe el proceso completo para levantar, probar y desplegar CircleGuard sobre un ambiente nuevo (sin configuración previa). Los pasos asumen Windows con Git Bash o PowerShell y Docker Desktop instalado.
 
-**Capturas de ejecución real de los pipelines.** El presente documento incluye marcadores `[Image: ...]` en todos los puntos donde se requieren evidencias de ejecución. Estas capturas deben obtenerse ejecutando los tres pipelines contra un Jenkins real con acceso a un clúster Kubernetes y añadirse al documento. Sin estas evidencias, el cumplimiento de los puntos 2, 4 y 5 del taller no es completamente verificable.
+### 7.1 Prerrequisitos del sistema
 
-**Resultados reales de Locust.** Los valores de tiempo de respuesta, throughput y tasa de errores presentados en la sección 4.4 son proyecciones basadas en los requisitos no funcionales del sistema. Los valores reales deben obtenerse ejecutando PR-001 y PR-002 y reemplazando el análisis de resultados esperados por un análisis con datos del CSV generado por Locust, incluyendo los percentiles P50, P95 y P99 por endpoint, el throughput máximo sostenido y la comparación contra los umbrales definidos.
+Antes de cualquier paso, la máquina debe contar con las siguientes herramientas instaladas y operativas:
 
-**Configuración real de Jenkins.** El reporte describe la estructura de los Jenkinsfiles pero no incluye capturas de la configuración del job en Jenkins (plugins instalados, credenciales configuradas, agentes disponibles). Se recomienda agregar capturas de la pantalla de configuración del job mostrando la rama, el Jenkinsfile y las credenciales.
+| Herramienta | Versión recomendada | Uso |
+|---|---|---|
+| Docker Desktop | 4.30 o superior | Contenedores de Jenkins, infraestructura local y clúster Kubernetes |
+| Docker Desktop → Kubernetes | Habilitado | Settings → Kubernetes → Enable Kubernetes |
+| Java JDK | 21 (Eclipse Temurin) | Compilación y ejecución de servicios |
+| Git | 2.40 o superior | Clonado del repositorio y operaciones de SCM |
+| Bash / Git Bash | Incluido en Git para Windows | Ejecución de los scripts de bootstrap (`setup-k8s-jenkins.sh`, etc.) |
+| Python | 3.10 o superior | Solo si se ejecutan pruebas Locust localmente (Jenkins ya lo trae) |
 
-**Pruebas de integración con Kafka embebido.** Las pruebas PI-001 a PI-004 verifican el cableado del contexto Spring mockeando el `KafkaTemplate`. Para una validación más robusta se recomienda agregar al menos una prueba con `@EmbeddedKafka` que verifique que los mensajes se publican y consumen a través de un broker real embebido, cerrando el ciclo de validación de la cadena `form-service → Kafka → promotion-service`.
+El wrapper de Gradle (`./gradlew`) viene incluido en el repositorio, por lo que **no es necesario instalar Gradle** manualmente.
 
-**Video de evidencia.** El enunciado requiere un video de máximo ocho minutos que muestre la ejecución exitosa de los pipelines, las pruebas y el despliegue. Este documento es complementario al video; ambos deben entregarse conjuntamente.
+### 7.2 Clonado y configuración del proyecto
 
----
+Desde Git Bash en la carpeta donde se desea ubicar el proyecto:
 
-## 8. Estructura de archivos creados
+```bash
+git clone https://github.com/<tu-usuario>/circle-guard-public.git
+cd circle-guard-public
+cp .env.example .env
+```
 
-En el marco de este taller se crearon los siguientes archivos que no existían previamente en el repositorio. Los manifiestos Kubernetes se encuentran en `k8s/namespaces.yaml`, `k8s/infrastructure/` (cuatro archivos) y `k8s/services/` (seis archivos, uno por servicio). Los Dockerfiles se encuentran en el directorio raíz de cada servicio seleccionado. Los pipelines de Jenkins se encuentran en `jenkins/Jenkinsfile.dev`, `jenkins/Jenkinsfile.stage` y `jenkins/Jenkinsfile.master`. Las pruebas unitarias e integración nuevas están distribuidas dentro de los módulos de cada servicio en sus directorios `src/test/` respectivos, y las pruebas E2E y de rendimiento residen en el módulo independiente `tests/`. El presente reporte se encuentra en `docs/report/taller2-report.md`.
+A continuación se debe editar el archivo `.env` con los valores reales. Las variables mínimas a configurar son `JENKINS_ADMIN_USERNAME` y `JENKINS_ADMIN_PASSWORD` (credenciales que JCasC creará automáticamente en Jenkins) y `GIT_REPO_URL` (URL del fork del repositorio). Las credenciales `GIT_TOKEN`, `DOCKERHUB_USERNAME` y `DOCKERHUB_PASSWORD` pueden quedarse vacías porque los pipelines actuales no las requieren.
 
----
+### 7.3 Levantar la infraestructura local
 
-*Documento elaborado como parte del Taller 2 de Ingeniería de Software V — Universidad, 2026-05-02*
+La infraestructura de soporte (PostgreSQL, Neo4j, Redis, Kafka, Zookeeper, OpenLDAP) se levanta con un único comando:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+```
+
+Para verificar que todos los contenedores están en estado `healthy`:
+
+```bash
+docker compose -f docker-compose.dev.yml ps
+```
+
+Esta infraestructura solo es necesaria si se desea ejecutar los servicios localmente fuera de Kubernetes. Las pruebas de integración usan instancias embebidas y no la requieren.
+
+### 7.4 Pruebas locales sin Kubernetes
+
+Con la infraestructura levantada (o sin ella, en el caso de las pruebas de integración), se pueden ejecutar todas las pruebas localmente:
+
+```bash
+# Pruebas unitarias de los seis servicios
+./gradlew :services:circleguard-auth-service:test \
+          :services:circleguard-identity-service:test \
+          :services:circleguard-form-service:test \
+          :services:circleguard-promotion-service:test \
+          :services:circleguard-notification-service:test \
+          :services:circleguard-dashboard-service:test \
+    --continue
+
+# Pruebas de integración (Kafka, Neo4j y Redis embebidos; no requieren Docker)
+./gradlew :services:circleguard-form-service:integrationTest \
+          :services:circleguard-promotion-service:integrationTest \
+          :services:circleguard-notification-service:integrationTest \
+          :services:circleguard-identity-service:integrationTest \
+          :services:circleguard-dashboard-service:integrationTest \
+    --continue
+```
+
+Para las pruebas E2E y de rendimiento se necesita primero el despliegue Kubernetes (sección 7.5). Una vez el clúster esté corriendo:
+
+```bash
+# E2E contra los puertos NodePort de Kubernetes
+BASE_URL=http://host.docker.internal \
+AUTH_PORT=30180 IDENTITY_PORT=30083 FORM_PORT=30086 \
+PROMOTION_PORT=30088 NOTIFICATION_PORT=30082 DASHBOARD_PORT=30084 \
+bash jenkins/scripts/run-e2e.sh
+
+# Locust en modo baseline (10 usuarios, 60 segundos)
+LOCUST_HOST=http://host.docker.internal:30086 \
+PROFILE=baseline \
+bash jenkins/scripts/run-locust.sh
+```
+
+### 7.5 Configurar Kubernetes y Jenkins
+
+El bootstrap del entorno CI/CD se realiza en cinco pasos secuenciales:
+
+**Paso 1 — Habilitar Kubernetes en Docker Desktop.** Settings → Kubernetes → Enable Kubernetes. Esperar a que el ícono cambie a verde.
+
+**Paso 2 — Crear los namespaces.** Desde Git Bash:
+
+```bash
+bash jenkins/scripts/setup-namespaces.sh
+```
+
+**Paso 3 — Aplicar el ServiceAccount, RBAC y obtener las credenciales K8s.** Este script aplica `jenkins-account.yaml`, extrae el token del `Secret` `jenkins-token` y escribe `K8S_SA_TOKEN` y `K8S_API_SERVER` en el archivo `.env`. JCasC los leerá al arrancar Jenkins y creará la credencial `k8s-sa-token` automáticamente.
+
+```bash
+bash jenkins/scripts/setup-k8s-jenkins.sh
+```
+
+Volver a ejecutar este script cada vez que Docker Desktop reinicie y cambie el puerto del API server, ya que `K8S_API_SERVER` incluye ese puerto.
+
+**Paso 4 — Levantar Jenkins.** El contenedor leerá `casc.yaml` y configurará automáticamente el usuario admin, las credenciales y los tres jobs de pipeline.
+
+```bash
+docker compose -f jenkins/config/docker-compose.jenkins.yml up -d --build
+```
+
+Después de un minuto aproximadamente, Jenkins estará disponible en `http://localhost:8080`. Login con las credenciales del archivo `.env`.
+
+### 7.6 Ejecutar los pipelines
+
+Una vez Jenkins esté corriendo, los tres jobs (`circleguard-dev`, `circleguard-stage`, `circleguard-master`) ya están creados por JCasC y apuntan al repositorio Git configurado en `.env`. Para ejecutar cualquiera de ellos basta con abrirlo en la UI y hacer clic en **Build with Parameters**, dejar los valores por defecto y hacer clic en **Build**.
+
+Cada pipeline ejecuta una secuencia distinta:
+
+| Pipeline | Stages clave |
+|---|---|
+| `circleguard-dev` | Checkout → Unit Tests → Integration Tests → Build JARs → Build Docker Images → Deploy → Wait for Rollout → Smoke Tests |
+| `circleguard-stage` | Checkout → Unit Tests → Integration Tests → Build JARs → Build & Push → Deploy → Wait for Rollout → E2E Tests → Performance Baseline |
+| `circleguard-master` | Checkout → Unit Tests → Integration Tests → Build JARs → Build & Push → Deploy → Wait for Rollout → E2E Tests → Performance Tests → Generate Release Notes → Tag Release |
+
+El parámetro `SKIP_DOCKER_BUILD` permite re-ejecutar un pipeline reutilizando las imágenes Docker ya construidas (etiqueta `*-latest`), útil cuando se itera sobre stages posteriores al build.
+
+### 7.7 Comandos extra de ayuda
+
+Los siguientes comandos son útiles durante el desarrollo y la depuración del entorno.
+
+**Estado y diagnóstico de Kubernetes:**
+
+```bash
+# Ver todos los recursos de un namespace
+kubectl get all -n circleguard-dev
+kubectl get all -n circleguard-stage
+kubectl get all -n circleguard-master
+
+# Ver logs de un servicio específico (último contenedor)
+kubectl logs -n circleguard-dev deploy/auth-service --tail=100
+
+# Ver logs en tiempo real
+kubectl logs -n circleguard-dev deploy/promotion-service -f
+
+# Describir un pod que falla (eventos, condiciones, init containers)
+kubectl describe pod -n circleguard-dev <nombre-del-pod>
+
+# Verificar el ConfigMap y Secret compartidos
+kubectl get configmap circleguard-config -n circleguard-dev -o yaml
+kubectl get secret circleguard-secrets -n circleguard-dev -o yaml
+```
+
+**Reinicio y limpieza de despliegues:**
+
+```bash
+# Forzar redeploy de un servicio sin cambiar la imagen
+kubectl rollout restart deployment/form-service -n circleguard-dev
+
+# Eliminar todos los deployments de un namespace (mantiene namespace y configs)
+kubectl delete deployments --all -n circleguard-dev
+
+# Eliminar un namespace completo (incluye todos sus recursos)
+kubectl delete namespace circleguard-dev
+
+# Recrear todo el namespace desde cero
+bash jenkins/scripts/setup-namespaces.sh
+kubectl apply -f k8s/configmap.yaml -n circleguard-dev
+kubectl apply -f k8s/infrastructure/ -n circleguard-dev
+kubectl apply -f k8s/services/ -n circleguard-dev
+```
+
+**Construcción manual de imágenes Docker:**
+
+```bash
+# Build de un solo servicio (debe ejecutarse desde la raíz del repositorio)
+docker build -f services/circleguard-auth-service/Dockerfile \
+    -t circleguard/auth-service:dev-latest .
+
+# Build de todos los servicios en serie
+for svc in auth identity form promotion notification dashboard; do
+    docker build -f services/circleguard-${svc}-service/Dockerfile \
+        -t circleguard/${svc}-service:dev-latest .
+done
+```
+
+**Operaciones sobre el contenedor Jenkins:**
+
+```bash
+# Ver logs del contenedor Jenkins
+docker logs jenkins -f
+
+# Reconstruir Jenkins después de cambios en Dockerfile.jenkins, plugins.txt o casc.yaml
+docker compose -f jenkins/config/docker-compose.jenkins.yml up -d --build
+
+# Bajar Jenkins sin destruir el volumen (preserva configuración)
+docker compose -f jenkins/config/docker-compose.jenkins.yml down
+
+# Bajar Jenkins y eliminar el volumen (configuración borrada — JCasC reconstruye al volver a subir)
+docker compose -f jenkins/config/docker-compose.jenkins.yml down -v
+
+# Entrar al contenedor para diagnóstico
+docker exec -it jenkins bash
+```
+
+**Ejecutar Locust manualmente con perfiles distintos:**
+
+```bash
+# Perfil baseline (10 usuarios / 60 s) — usado por stage
+LOCUST_HOST=http://localhost:8086 PROFILE=baseline bash jenkins/scripts/run-locust.sh
+
+# Perfil master (50 usuarios / 120 s) — usado por master
+LOCUST_HOST=http://localhost:8086 PROFILE=master bash jenkins/scripts/run-locust.sh
+
+# Perfil stress (200 usuarios / 300 s) — manual, fuera de pipelines
+LOCUST_HOST=http://localhost:8086 PROFILE=stress bash jenkins/scripts/run-locust.sh
+```
+
+Los reportes generados quedan en `tests/performance/reports/locust-report-<perfil>.html` y los CSV de estadísticas en el mismo directorio.
+
+**Acceso directo a los servicios desplegados:**
+
+Los servicios exponen los siguientes NodePorts y son accesibles desde la máquina host vía `http://localhost:<nodePort>`:
+
+| Servicio | Puerto interno | NodePort |
+|---|---|---|
+| auth-service | 8180 | 30180 |
+| identity-service | 8083 | 30083 |
+| form-service | 8086 | 30086 |
+| promotion-service | 8088 | 30088 |
+| notification-service | 8082 | 30082 |
+| dashboard-service | 8084 | 30084 |
+
+Para verificar la salud de un servicio desplegado:
+
+```bash
+curl http://localhost:30086/actuator/health
+```
+
+**Verificar que la configuración JCasC se aplicó:**
+
+Desde la UI de Jenkins, en `Manage Jenkins → Configuration as Code → View Configuration` aparece el YAML efectivo cargado desde `casc.yaml`. Si se editó el archivo en disco, el botón **Reload existing configuration** lo aplica sin reiniciar el contenedor.

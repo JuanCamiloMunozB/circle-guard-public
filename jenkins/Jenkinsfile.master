@@ -1,6 +1,13 @@
 pipeline {
     agent any
 
+    options {
+        timeout(time: 60, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timestamps()
+    }
+
     parameters {
         booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
     }
@@ -8,10 +15,8 @@ pipeline {
     environment {
         REGISTRY      = 'circleguard'
         K8S_NAMESPACE = 'circleguard-master'
-        K8S_URL       = 'https://host.docker.internal:63399'
-        K8S_CRED_ID   = 'k8s-token'
-        KUBECTL       = 'kubectl --insecure-skip-tls-verify'
         IMAGE_TAG     = "v${BUILD_NUMBER}"
+        NODE_HOST     = 'host.docker.internal'
     }
 
     stages {
@@ -95,15 +100,15 @@ pipeline {
 
         stage('Deploy to Master') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
-                    sh "${KUBECTL} apply -f k8s/namespaces.yaml"
-                    sh "${KUBECTL} apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} apply -f k8s/services/ -n ${K8S_NAMESPACE}"
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
+                    sh "kubectl apply -f k8s/namespaces.yaml"
+                    sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "${KUBECTL} set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
+                            sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
                         }
                     }
                 }
@@ -112,12 +117,11 @@ pipeline {
 
         stage('Wait for Rollout') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "${KUBECTL} rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
+                            sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
                         }
                     }
                 }
@@ -126,51 +130,16 @@ pipeline {
 
         stage('E2E Tests') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
-                    sh """
-                        set -e
-
-                        PF_AUTH=""
-                        PF_IDENTITY=""
-                        PF_FORM=""
-                        PF_PROMOTION=""
-                        PF_NOTIFICATION=""
-                        PF_DASHBOARD=""
-
-                        cleanup() {
-                          for pid in "\$PF_AUTH" "\$PF_IDENTITY" "\$PF_FORM" "\$PF_PROMOTION" "\$PF_NOTIFICATION" "\$PF_DASHBOARD"; do
-                            if [ -n "\$pid" ]; then
-                              kill "\$pid" >/dev/null 2>&1 || true
-                            fi
-                          done
-                        }
-                        trap cleanup EXIT
-
-                        ${KUBECTL} port-forward svc/auth-service 18180:8180 -n ${K8S_NAMESPACE} >/tmp/pf-auth.log 2>&1 &
-                        PF_AUTH=\$!
-                        ${KUBECTL} port-forward svc/identity-service 18083:8083 -n ${K8S_NAMESPACE} >/tmp/pf-identity.log 2>&1 &
-                        PF_IDENTITY=\$!
-                        ${KUBECTL} port-forward svc/form-service 18086:8086 -n ${K8S_NAMESPACE} >/tmp/pf-form.log 2>&1 &
-                        PF_FORM=\$!
-                        ${KUBECTL} port-forward svc/promotion-service 18088:8088 -n ${K8S_NAMESPACE} >/tmp/pf-promotion.log 2>&1 &
-                        PF_PROMOTION=\$!
-                        ${KUBECTL} port-forward svc/notification-service 18082:8082 -n ${K8S_NAMESPACE} >/tmp/pf-notification.log 2>&1 &
-                        PF_NOTIFICATION=\$!
-                        ${KUBECTL} port-forward svc/dashboard-service 18084:8084 -n ${K8S_NAMESPACE} >/tmp/pf-dashboard.log 2>&1 &
-                        PF_DASHBOARD=\$!
-
-                        sleep 10
-
-                        ./gradlew :tests:e2e:test \
-                          -Dbase.url=http://127.0.0.1 \
-                          -Dauth.port=18180 \
-                          -Didentity.port=18083 \
-                          -Dform.port=18086 \
-                          -Dpromotion.port=18088 \
-                          -Dnotification.port=18082 \
-                          -Ddashboard.port=18084
-                    """
+                withEnv([
+                    "BASE_URL=http://${NODE_HOST}",
+                    "AUTH_PORT=30180",
+                    "IDENTITY_PORT=30083",
+                    "FORM_PORT=30086",
+                    "PROMOTION_PORT=30088",
+                    "NOTIFICATION_PORT=30082",
+                    "DASHBOARD_PORT=30084"
+                ]) {
+                    sh 'chmod +x jenkins/scripts/run-e2e.sh && jenkins/scripts/run-e2e.sh'
                 }
             }
             post {
@@ -182,106 +151,36 @@ pipeline {
 
         stage('Performance Tests') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
-                    sh """
-                        export PATH="\$PATH:\$HOME/.local/bin"
+                withEnv([
+                    "LOCUST_HOST=http://${NODE_HOST}:30086",
+                    "DASHBOARD_HOST=http://${NODE_HOST}:30084",
+                    "PROFILE=master"
+                ]) {
+                    sh '''
+                        export PATH="$PATH:$HOME/.local/bin"
                         pip3 show locust >/dev/null 2>&1 || pip3 install locust --quiet --break-system-packages
-                        locust -f tests/performance/locustfile.py \
-                            --headless -u 50 -r 5 -t 120s \
-                            --host http://\$(${KUBECTL} get svc form-service -n ${K8S_NAMESPACE} -o jsonpath="{.spec.clusterIP}"):8086 \
-                            --html tests/performance/locust-report-master.html \
-                            --csv tests/performance/locust-master \
-                            --exit-code-on-error 0
-                    """
+                        chmod +x jenkins/scripts/run-locust.sh
+                        jenkins/scripts/run-locust.sh
+                    '''
                 }
             }
             post {
                 always {
                     publishHTML(target: [
-                        reportDir: 'tests/performance',
+                        reportDir: 'tests/performance/reports',
                         reportFiles: 'locust-report-master.html',
                         reportName: 'Master Performance Report'
                     ])
-                    archiveArtifacts artifacts: 'tests/performance/locust-master*.csv', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'tests/performance/reports/locust-master*.csv', allowEmptyArchive: true
                 }
             }
         }
 
         stage('Generate Release Notes') {
             steps {
-                script {
-                    def previousTag = sh(
-                        script: "git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo 'NONE'",
-                        returnStdout: true
-                    ).trim()
-
-                    def commits = previousTag == 'NONE'
-                        ? sh(script: "git log --oneline -20 --pretty='- %s (%an)'", returnStdout: true).trim()
-                        : sh(script: "git log ${previousTag}..HEAD --oneline --pretty='- %s (%an)'", returnStdout: true).trim()
-
-                    def testResults = sh(
-                        script: "grep -r '<testsuite' build/ --include='*.xml' | grep -oP 'tests=\"\\K[0-9]+' | paste -sd+ | bc 2>/dev/null || echo '0'",
-                        returnStdout: true
-                    ).trim()
-
-                    def failures = sh(
-                        script: "grep -r '<testsuite' build/ --include='*.xml' | grep -oP 'failures=\"\\K[0-9]+' | paste -sd+ | bc 2>/dev/null || echo '0'",
-                        returnStdout: true
-                    ).trim()
-
-                    def date = sh(script: "date '+%Y-%m-%d'", returnStdout: true).trim()
-                    def gitAuthor = sh(script: "git log -1 --pretty='%an'", returnStdout: true).trim()
-                    def gitHash = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-
-                    def releaseNotes = """# CircleGuard Release Notes - ${IMAGE_TAG}
-
-**Date:** ${date}
-**Build:** ${BUILD_NUMBER}
-**Commit:** ${gitHash}
-**Author:** ${gitAuthor}
-**Environment:** master / production
-
----
-
-## Services Released
-
-| Service            | Port | Image Tag     |
-|--------------------|------|---------------|
-| auth-service       | 8180 | ${IMAGE_TAG}  |
-| identity-service   | 8083 | ${IMAGE_TAG}  |
-| form-service       | 8086 | ${IMAGE_TAG}  |
-| promotion-service  | 8088 | ${IMAGE_TAG}  |
-| notification-service| 8082 | ${IMAGE_TAG} |
-| dashboard-service  | 8084 | ${IMAGE_TAG}  |
-
----
-
-## Changes
-
-${commits}
-
----
-
-## Test Summary
-
-- Total tests executed: ${testResults}
-- Failures: ${failures}
-- Integration tests: PASS
-- Performance tests: See report
-
----
-
-## Deployment
-
-- Kubernetes namespace: ${K8S_NAMESPACE}
-- Infrastructure: PostgreSQL 16, Neo4j 5.26, Kafka 7.6.0, Redis 7.2
-- Rollout strategy: Rolling update (zero downtime)
-"""
-                    writeFile file: "docs/release-notes-${IMAGE_TAG}.md", text: releaseNotes
-                    archiveArtifacts artifacts: "docs/release-notes-${IMAGE_TAG}.md"
-                    echo "Release notes generated: docs/release-notes-${IMAGE_TAG}.md"
-                }
+                sh "chmod +x jenkins/scripts/generate-release-notes.sh"
+                sh "jenkins/scripts/generate-release-notes.sh ${IMAGE_TAG} ${BUILD_NUMBER} ${K8S_NAMESPACE} docs/release-notes-${IMAGE_TAG}.md"
+                archiveArtifacts artifacts: "docs/release-notes-${IMAGE_TAG}.md"
             }
         }
 
@@ -294,6 +193,10 @@ ${commits}
     }
 
     post {
+        always {
+            sh 'docker logout || true'
+            cleanWs()
+        }
         success {
             echo "MASTER pipeline succeeded - Release ${IMAGE_TAG}"
         }

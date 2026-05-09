@@ -18,10 +18,16 @@ Run (stress):
 """
 
 import json
+import os
 import uuid
 import random
 from locust import HttpUser, task, between, tag, events
 from locust.exception import StopUser
+
+# Host endpoints come from the environment so the same locustfile drives local
+# runs (docker-compose), stage and master pipelines without code changes.
+LOCUST_HOST = os.getenv("LOCUST_HOST", "http://localhost:8086")
+DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "http://localhost:8084")
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +66,7 @@ class StudentUser(HttpUser):
     Represents the highest-frequency operation in the system.
     """
     wait_time = between(1, 3)
-    host = "http://localhost:8086"
+    host = LOCUST_HOST
     weight = 10
 
     def on_start(self):
@@ -141,7 +147,7 @@ class AdminUser(HttpUser):
     Lower frequency than students but more complex operations.
     """
     wait_time = between(3, 8)
-    host = "http://localhost:8086"
+    host = LOCUST_HOST
     weight = 2  # fewer admins than students
 
     def on_start(self):
@@ -190,7 +196,7 @@ class DashboardUser(HttpUser):
     Represents read-heavy dashboard queries against dashboard-service.
     """
     wait_time = between(5, 15)
-    host = "http://localhost:8084"
+    host = DASHBOARD_HOST
     weight = 1  # least frequent
 
     DEPARTMENTS = ["Engineering", "Medicine", "Law", "Sciences", "Arts", "Mathematics"]

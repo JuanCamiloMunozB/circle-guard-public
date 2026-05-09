@@ -1,6 +1,13 @@
 pipeline {
     agent any
 
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+    }
+
     parameters {
         booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
     }
@@ -8,11 +15,8 @@ pipeline {
     environment {
         REGISTRY        = 'circleguard'
         K8S_NAMESPACE   = 'circleguard-dev'
-        K8S_URL         = 'https://host.docker.internal:63399'
-        K8S_CRED_ID     = 'k8s-token'
         SERVICES        = 'auth-service identity-service form-service promotion-service notification-service dashboard-service'
         SERVICE_MAP     = 'auth-service:8180 identity-service:8083 form-service:8086 promotion-service:8088 notification-service:8082 dashboard-service:8084'
-        KUBECTL         = 'kubectl --insecure-skip-tls-verify'
     }
 
     stages {
@@ -39,6 +43,22 @@ pipeline {
             post {
                 always {
                     junit '**/build/test-results/test/*.xml'
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            steps {
+                sh './gradlew :services:circleguard-form-service:integrationTest \
+                              :services:circleguard-promotion-service:integrationTest \
+                              :services:circleguard-notification-service:integrationTest \
+                              :services:circleguard-identity-service:integrationTest \
+                              :services:circleguard-dashboard-service:integrationTest \
+                    --continue'
+            }
+            post {
+                always {
+                    junit '**/build/test-results/integrationTest/*.xml'
                 }
             }
         }
@@ -78,29 +98,28 @@ pipeline {
 
         stage('Deploy to Dev') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
-                    sh "${KUBECTL} apply -f k8s/namespaces.yaml"
-                    sh "${KUBECTL} apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} apply -f k8s/services/ -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/auth-service         auth-service=${REGISTRY}/auth-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/identity-service     identity-service=${REGISTRY}/identity-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/form-service         form-service=${REGISTRY}/form-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/promotion-service    promotion-service=${REGISTRY}/promotion-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/notification-service notification-service=${REGISTRY}/notification-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} set image deployment/dashboard-service    dashboard-service=${REGISTRY}/dashboard-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
+                    sh "kubectl apply -f k8s/namespaces.yaml"
+                    sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
+                    sh "kubectl set image deployment/auth-service         auth-service=${REGISTRY}/auth-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
+                    sh "kubectl set image deployment/identity-service     identity-service=${REGISTRY}/identity-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    sh "kubectl set image deployment/form-service         form-service=${REGISTRY}/form-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
+                    sh "kubectl set image deployment/promotion-service    promotion-service=${REGISTRY}/promotion-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    sh "kubectl set image deployment/notification-service notification-service=${REGISTRY}/notification-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    sh "kubectl set image deployment/dashboard-service    dashboard-service=${REGISTRY}/dashboard-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
                 }
             }
         }
 
         stage('Wait for Rollout') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "${KUBECTL} rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=120s"
+                            sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=120s"
                         }
                     }
                 }
@@ -109,8 +128,7 @@ pipeline {
 
         stage('Smoke Tests') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
                     script {
                         def checks = [
                             [svc: 'auth-service',         port: '8180'],
@@ -122,7 +140,7 @@ pipeline {
                         ]
                         checks.each { c ->
                             def health = sh(
-                                script: "${KUBECTL} exec -n ${K8S_NAMESPACE} deploy/${c.svc} -- sh -c 'wget -O /tmp/health http://localhost:${c.port}/actuator/health 2>/dev/null; cat /tmp/health'",
+                                script: "kubectl exec -n ${K8S_NAMESPACE} deploy/${c.svc} -- sh -c 'wget -O /tmp/health http://localhost:${c.port}/actuator/health 2>/dev/null; cat /tmp/health'",
                                 returnStdout: true
                             ).trim()
                             echo "${c.svc} health: ${health}"
@@ -138,6 +156,10 @@ pipeline {
     }
 
     post {
+        always {
+            sh 'docker logout || true'
+            cleanWs()
+        }
         success {
             echo "DEV pipeline succeeded - Build #${BUILD_NUMBER}"
         }

@@ -1,6 +1,13 @@
 pipeline {
     agent any
 
+    options {
+        timeout(time: 45, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+    }
+
     parameters {
         booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
     }
@@ -8,9 +15,7 @@ pipeline {
     environment {
         REGISTRY      = 'circleguard'
         K8S_NAMESPACE = 'circleguard-stage'
-        K8S_URL       = 'https://host.docker.internal:63399'
-        K8S_CRED_ID   = 'k8s-token'
-        KUBECTL       = 'kubectl --insecure-skip-tls-verify'
+        NODE_HOST     = 'host.docker.internal'
     }
 
     stages {
@@ -92,15 +97,15 @@ pipeline {
 
         stage('Deploy to Stage') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
-                    sh "${KUBECTL} apply -f k8s/namespaces.yaml"
-                    sh "${KUBECTL} apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
-                    sh "${KUBECTL} apply -f k8s/services/ -n ${K8S_NAMESPACE}"
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
+                    sh "kubectl apply -f k8s/namespaces.yaml"
+                    sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "${KUBECTL} set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                            sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
                         }
                     }
                 }
@@ -109,12 +114,11 @@ pipeline {
 
         stage('Wait for Rollout') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
+                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true) {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "${KUBECTL} rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=180s"
+                            sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=180s"
                         }
                     }
                 }
@@ -123,51 +127,16 @@ pipeline {
 
         stage('E2E Tests') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
-                    sh """
-                        set -e
-
-                        PF_AUTH=""
-                        PF_IDENTITY=""
-                        PF_FORM=""
-                        PF_PROMOTION=""
-                        PF_NOTIFICATION=""
-                        PF_DASHBOARD=""
-
-                        cleanup() {
-                          for pid in "\$PF_AUTH" "\$PF_IDENTITY" "\$PF_FORM" "\$PF_PROMOTION" "\$PF_NOTIFICATION" "\$PF_DASHBOARD"; do
-                            if [ -n "\$pid" ]; then
-                              kill "\$pid" >/dev/null 2>&1 || true
-                            fi
-                          done
-                        }
-                        trap cleanup EXIT
-
-                        ${KUBECTL} port-forward svc/auth-service 18180:8180 -n ${K8S_NAMESPACE} >/tmp/pf-auth.log 2>&1 &
-                        PF_AUTH=\$!
-                        ${KUBECTL} port-forward svc/identity-service 18083:8083 -n ${K8S_NAMESPACE} >/tmp/pf-identity.log 2>&1 &
-                        PF_IDENTITY=\$!
-                        ${KUBECTL} port-forward svc/form-service 18086:8086 -n ${K8S_NAMESPACE} >/tmp/pf-form.log 2>&1 &
-                        PF_FORM=\$!
-                        ${KUBECTL} port-forward svc/promotion-service 18088:8088 -n ${K8S_NAMESPACE} >/tmp/pf-promotion.log 2>&1 &
-                        PF_PROMOTION=\$!
-                        ${KUBECTL} port-forward svc/notification-service 18082:8082 -n ${K8S_NAMESPACE} >/tmp/pf-notification.log 2>&1 &
-                        PF_NOTIFICATION=\$!
-                        ${KUBECTL} port-forward svc/dashboard-service 18084:8084 -n ${K8S_NAMESPACE} >/tmp/pf-dashboard.log 2>&1 &
-                        PF_DASHBOARD=\$!
-
-                        sleep 10
-
-                        ./gradlew :tests:e2e:test \
-                          -Dbase.url=http://127.0.0.1 \
-                          -Dauth.port=18180 \
-                          -Didentity.port=18083 \
-                          -Dform.port=18086 \
-                          -Dpromotion.port=18088 \
-                          -Dnotification.port=18082 \
-                          -Ddashboard.port=18084
-                    """
+                withEnv([
+                    "BASE_URL=http://${NODE_HOST}",
+                    "AUTH_PORT=30180",
+                    "IDENTITY_PORT=30083",
+                    "FORM_PORT=30086",
+                    "PROMOTION_PORT=30088",
+                    "NOTIFICATION_PORT=30082",
+                    "DASHBOARD_PORT=30084"
+                ]) {
+                    sh 'chmod +x jenkins/scripts/run-e2e.sh && jenkins/scripts/run-e2e.sh'
                 }
             }
             post {
@@ -179,24 +148,24 @@ pipeline {
 
         stage('Performance Baseline') {
             steps {
-                withKubeConfig([credentialsId: K8S_CRED_ID,
-                                serverUrl: K8S_URL]) {
-                    sh """
-                        export PATH="\$PATH:\$HOME/.local/bin"
+                withEnv([
+                    "LOCUST_HOST=http://${NODE_HOST}:30086",
+                    "DASHBOARD_HOST=http://${NODE_HOST}:30084",
+                    "PROFILE=baseline"
+                ]) {
+                    sh '''
+                        export PATH="$PATH:$HOME/.local/bin"
                         pip3 show locust >/dev/null 2>&1 || pip3 install locust --quiet --break-system-packages
-                        locust -f tests/performance/locustfile.py \
-                            --headless -u 10 -r 2 -t 60s \
-                            --host http://\$(${KUBECTL} get svc form-service -n ${K8S_NAMESPACE} -o jsonpath="{.spec.clusterIP}"):8086 \
-                            --html tests/performance/locust-report-stage.html \
-                            --exit-code-on-error 0
-                    """
+                        chmod +x jenkins/scripts/run-locust.sh
+                        jenkins/scripts/run-locust.sh
+                    '''
                 }
             }
             post {
                 always {
                     publishHTML(target: [
-                        reportDir: 'tests/performance',
-                        reportFiles: 'locust-report-stage.html',
+                        reportDir: 'tests/performance/reports',
+                        reportFiles: 'locust-report-baseline.html',
                         reportName: 'Stage Performance Report'
                     ])
                 }
@@ -205,6 +174,10 @@ pipeline {
     }
 
     post {
+        always {
+            sh 'docker logout || true'
+            cleanWs()
+        }
         success {
             echo "STAGE pipeline succeeded - Build #${BUILD_NUMBER}"
         }
