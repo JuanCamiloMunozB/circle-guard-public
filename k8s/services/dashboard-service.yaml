@@ -14,13 +14,6 @@ spec:
       labels:
         app: dashboard-service
     spec:
-      initContainers:
-        - name: wait-for-postgres
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z -w 2 postgres 5432; do echo "Waiting for postgres..."; sleep 3; done']
-        - name: wait-for-promotion
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z -w 2 promotion-service 8088; do echo "Waiting for promotion-service..."; sleep 3; done']
       containers:
         - name: dashboard-service
           image: circleguard/dashboard-service:latest

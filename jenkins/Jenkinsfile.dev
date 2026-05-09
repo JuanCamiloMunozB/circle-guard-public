@@ -101,7 +101,6 @@ pipeline {
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     sh "kubectl apply -f k8s/namespaces.yaml"
                     sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
-                    sh "kubectl apply -f k8s/infrastructure/ -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
                     sh "kubectl set image deployment/auth-service         auth-service=${REGISTRY}/auth-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
                     sh "kubectl set image deployment/identity-service     identity-service=${REGISTRY}/identity-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
@@ -119,7 +118,7 @@ pipeline {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
                          'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=120s"
+                            sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
                         }
                     }
                 }

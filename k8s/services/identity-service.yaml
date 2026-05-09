@@ -14,13 +14,6 @@ spec:
       labels:
         app: identity-service
     spec:
-      initContainers:
-        - name: wait-for-postgres
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z -w 2 postgres 5432; do echo "Waiting for postgres..."; sleep 3; done']
-        - name: wait-for-kafka
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z -w 2 kafka 9092; do echo "Waiting for kafka..."; sleep 3; done']
       containers:
         - name: identity-service
           image: circleguard/identity-service:latest

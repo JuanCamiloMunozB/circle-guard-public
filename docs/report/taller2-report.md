@@ -43,7 +43,11 @@ Para el despliegue en Kubernetes se estructuró el directorio `k8s/` con una sep
 
 Dentro del subdirectorio `infrastructure/` se encuentran cuatro manifiestos que despliegan los componentes de infraestructura: PostgreSQL con un `PersistentVolumeClaim` de 5 GiB y un `ConfigMap` que ejecuta el script `init-db.sql` al inicializar el contenedor; Kafka junto con su Zookeeper como par inseparable; Redis en modo de instancia única; y Neo4j con su propio `PersistentVolumeClaim`.
 
-Cada uno de los seis servicios de aplicación cuenta con su propio manifiesto en `k8s/services/`. Cada manifiesto está compuesto por tres recursos de Kubernetes: un `ConfigMap` que centraliza las variables de entorno del servicio (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios), un `Deployment` con una réplica inicial, sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`), y un `Service` de tipo `ClusterIP` que expone el puerto del contenedor dentro del namespace sin publicarlo al exterior.
+Cada uno de los seis servicios de aplicación cuenta con su propio manifiesto en `k8s/services/`. Cada manifiesto está compuesto por un `Deployment` con una réplica inicial, sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`), y un `Service` de tipo `NodePort` que expone el puerto del contenedor al exterior del nodo. Las variables de entorno del servicio (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios) provienen del `ConfigMap` compartido `circleguard-config` y del `Secret` `circleguard-secrets`, referenciados mediante `envFrom:` y `env:` según el recurso.
+
+La dependencia de los servicios respecto de la infraestructura (PostgreSQL, Neo4j, Kafka, Redis) se gestiona exclusivamente mediante las `readinessProbe`: mientras una dependencia no esté disponible, el pod no pasa al estado `Ready` y Kubernetes no le envía tráfico. Se optó por este enfoque en lugar de `initContainers` porque los `initContainers` requieren que las imágenes de utilidades (p. ej. `busybox`) estén en caché o disponibles en Docker Hub en el momento del despliegue; en entornos locales con Docker Desktop eso genera fallos `ErrImagePull` si Docker Hub aplica rate limiting. La `readinessProbe` funciona con la imagen de la aplicación, que ya está disponible localmente.
+
+Esta separación implica también una separación en el ciclo de vida de los despliegues: la infraestructura se despliega una vez por namespace mediante el script `k8s/install-infra.sh` (paso de bootstrap, ejecutado manualmente antes del primer pipeline) y raramente cambia; los servicios de aplicación se despliegan en cada ejecución del pipeline. De esta forma el pipeline no tiene que esperar a que Kafka, Neo4j ni PostgreSQL estén listos en cada build — ya lo están desde el bootstrap.
 
 El archivo `jenkins/config/jenkins-account.yaml` define el control de acceso basado en roles (RBAC) para la cuenta de servicio de Jenkins. Se declara un `ServiceAccount` en el namespace `default` y se crean `Role` y `RoleBinding` en cada uno de los tres namespaces de la aplicación (`circleguard-dev`, `circleguard-stage` y `circleguard-master`), otorgando permisos de lectura, creación, actualización y eliminación sobre `Deployments`, `StatefulSets`, `ReplicaSets`, `Services`, `ConfigMaps`, `PersistentVolumeClaims`, `Pods` y `Pods/portforward`. Adicionalmente, un `ClusterRole` y su correspondiente `ClusterRoleBinding` otorgan permisos sobre recursos de ámbito de clúster como `Namespaces` y `PersistentVolumes`, necesarios para la ejecución de `kubectl apply -f k8s/namespaces.yaml` desde el pipeline.
 
@@ -55,7 +59,7 @@ Jenkins actúa como el orquestador central de los pipelines. El `Dockerfile.jenk
 
 La configuración del controlador de Jenkins se gestiona declarativamente mediante el plugin **Configuration as Code (JCasC)**: el archivo `jenkins/config/casc.yaml` define el usuario administrador, las credenciales (Docker Hub y token de GitHub) y los tres jobs de pipeline apuntando al repositorio Git con sus respectivos `Jenkinsfile.dev`, `Jenkinsfile.stage` y `Jenkinsfile.master`. Las variables sensibles (usuario, contraseñas, tokens, URL del repo) provienen de un archivo `.env` local que el `docker-compose.jenkins.yml` carga vía `env_file:` y JCasC resuelve mediante sustitución `${VAR}` al arrancar el contenedor. Este enfoque permite re-crear todo el entorno Jenkins desde cero sin clics manuales: levantar el contenedor implica que el admin, las credenciales y los tres jobs ya están configurados.
 
-La comunicación con el clúster Kubernetes se realiza mediante el token del `ServiceAccount` `jenkins`, definido en `jenkins/config/jenkins-account.yaml`. El script `jenkins/scripts/setup-k8s-jenkins.sh` aplica el manifiesto RBAC, espera a que el `Secret` `jenkins-token` sea populado por Kubernetes, extrae el token Bearer y la URL del API server (reescrita de `127.0.0.1` a `host.docker.internal`), y los escribe como `K8S_SA_TOKEN` y `K8S_API_SERVER` en el archivo `.env`. JCasC lee esas variables al arrancar el contenedor y crea automáticamente la credencial `k8s-sa-token` en el Credential Store de Jenkins. En los pipelines, cada stage que ejecuta comandos `kubectl` envuelve sus pasos en `withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER, skipTlsVerify: true)`, que genera un kubeconfig temporal con autenticación por token Bearer y lo elimina al salir del bloque. Este enfoque es más cercano al control de acceso de producción: los pipelines se autentican con permisos acotados por RBAC en cada namespace en lugar de usar las credenciales de administrador del clúster.
+La comunicación con el clúster Kubernetes se realiza mediante el token del `ServiceAccount` `jenkins`, definido en `jenkins/config/jenkins-account.yaml`. El script `jenkins/scripts/setup-k8s-jenkins.sh` aplica el manifiesto RBAC, espera a que el `Secret` `jenkins-token` sea populado por Kubernetes, extrae el token Bearer y la URL del API server (reescrita de `127.0.0.1` a `host.docker.internal`), y los escribe como `K8S_SA_TOKEN` y `K8S_API_SERVER` en el archivo `.env`. JCasC lee esas variables al arrancar el contenedor y crea automáticamente la credencial `k8s-sa-token` en el Credential Store de Jenkins. En los pipelines, cada stage que ejecuta comandos `kubectl` envuelve sus pasos en `withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER)`, que genera un kubeconfig temporal con autenticación por token Bearer y lo elimina al salir del bloque. El plugin omite la verificación TLS de forma automática cuando no se proporciona un certificado de CA, lo que es adecuado para el clúster local de Docker Desktop. Este enfoque es más cercano al control de acceso de producción: los pipelines se autentican con permisos acotados por RBAC en cada namespace en lugar de usar las credenciales de administrador del clúster.
 
 [Image: Pantalla de Jenkins mostrando los tres pipelines (dev, stage, master) configurados, con sus últimas ejecuciones exitosas]
 
@@ -1065,7 +1069,7 @@ bash jenkins/scripts/run-locust.sh
 
 ### 7.5 Configurar Kubernetes y Jenkins
 
-El bootstrap del entorno CI/CD se realiza en cinco pasos secuenciales:
+El bootstrap del entorno CI/CD se realiza en cinco pasos secuenciales, ejecutados una sola vez antes del primer pipeline:
 
 **Paso 1 — Habilitar Kubernetes en Docker Desktop.** Settings → Kubernetes → Enable Kubernetes. Esperar a que el ícono cambie a verde.
 
@@ -1083,7 +1087,17 @@ bash jenkins/scripts/setup-k8s-jenkins.sh
 
 Volver a ejecutar este script cada vez que Docker Desktop reinicie y cambie el puerto del API server, ya que `K8S_API_SERVER` incluye ese puerto.
 
-**Paso 4 — Levantar Jenkins.** El contenedor leerá `casc.yaml` y configurará automáticamente el usuario admin, las credenciales y los tres jobs de pipeline.
+**Paso 4 — Desplegar la infraestructura en cada namespace.** Los componentes de infraestructura (PostgreSQL, Neo4j, Redis, Kafka, Zookeeper, LDAP) no se gestionan en el pipeline; se instalan una vez por namespace con el script de bootstrap. Los pipelines asumen que la infraestructura ya está corriendo.
+
+```bash
+bash k8s/install-infra.sh circleguard-dev
+bash k8s/install-infra.sh circleguard-stage
+bash k8s/install-infra.sh circleguard-master
+```
+
+El script aplica los manifiestos del directorio `k8s/infrastructure/`, espera a que cada deployment esté `Ready` con un timeout de 300 segundos y confirma que la infraestructura está disponible antes de salir. Solo es necesario repetirlo si se elimina el namespace o se reinicia el clúster con pérdida de datos.
+
+**Paso 5 — Levantar Jenkins.** El contenedor leerá `casc.yaml` y configurará automáticamente el usuario admin, las credenciales y los tres jobs de pipeline.
 
 ```bash
 docker compose -f jenkins/config/docker-compose.jenkins.yml up -d --build
@@ -1094,6 +1108,8 @@ Después de un minuto aproximadamente, Jenkins estará disponible en `http://loc
 ### 7.6 Ejecutar los pipelines
 
 Una vez Jenkins esté corriendo, los tres jobs (`circleguard-dev`, `circleguard-stage`, `circleguard-master`) ya están creados por JCasC y apuntan al repositorio Git configurado en `.env`. Para ejecutar cualquiera de ellos basta con abrirlo en la UI y hacer clic en **Build with Parameters**, dejar los valores por defecto y hacer clic en **Build**.
+
+> **Prerequisito:** antes del primer build de cada namespace, la infraestructura debe estar desplegada con `bash k8s/install-infra.sh <namespace>` (Paso 4 de la sección anterior). Los pipelines solo despliegan los servicios de aplicación (`k8s/services/`) y asumen que PostgreSQL, Neo4j, Kafka, Redis y LDAP ya están corriendo.
 
 Cada pipeline ejecuta una secuencia distinta:
 
@@ -1145,9 +1161,8 @@ kubectl delete namespace circleguard-dev
 
 # Recrear todo el namespace desde cero
 bash jenkins/scripts/setup-namespaces.sh
-kubectl apply -f k8s/configmap.yaml -n circleguard-dev
-kubectl apply -f k8s/infrastructure/ -n circleguard-dev
-kubectl apply -f k8s/services/ -n circleguard-dev
+bash k8s/install-infra.sh circleguard-dev
+# Los servicios de aplicación los despliega el pipeline en el siguiente build
 ```
 
 **Construcción manual de imágenes Docker:**

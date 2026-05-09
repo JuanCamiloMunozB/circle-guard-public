@@ -14,13 +14,6 @@ spec:
       labels:
         app: notification-service
     spec:
-      initContainers:
-        - name: wait-for-kafka
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z -w 2 kafka 9092; do echo "Waiting for kafka..."; sleep 3; done']
-        - name: wait-for-auth
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z -w 2 auth-service 8180; do echo "Waiting for auth-service..."; sleep 3; done']
       containers:
         - name: notification-service
           image: circleguard/notification-service:latest
