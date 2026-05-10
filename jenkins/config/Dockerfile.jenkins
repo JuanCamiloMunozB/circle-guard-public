@@ -33,10 +33,6 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kub
        -o /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl
 
-# Git identity required for tagging in CI
-RUN git config --global user.email "jenkins@circleguard.ci" \
-    && git config --global user.name "Jenkins CI"
-
 # Pre-install plugins listed in plugins.txt — skips the manual install wizard
 COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt

@@ -191,12 +191,6 @@ pipeline {
             }
         }
 
-        stage('Tag Release') {
-            steps {
-                sh "git tag -a ${IMAGE_TAG} -m 'Release ${IMAGE_TAG} - Build ${BUILD_NUMBER}'"
-                sh "git push origin ${IMAGE_TAG}"
-            }
-        }
     }
 
     post {
