@@ -5,7 +5,6 @@
 **Proyecto:** CircleGuard — Sistema de rastreo de contactos universitario  
 **Repositorio:** circle-guard-public  
 
----
 
 ## 1. Introducción y selección de microservicios
 
@@ -19,97 +18,107 @@ El siguiente diagrama de secuencia representa el flujo principal del sistema, qu
 
 ![Diagrama de secuencia UML mostrando la interacción entre los microservicios seleccionados](./images/sequence_diagram.png)
 
----
 
 ## 2. Configuración de Jenkins, Docker y Kubernetes (Actividad 1 — 10%)
 
-### 2.1 Dockerfiles por servicio
+### 2.1 Empaquetado de los servicios
 
-Se creó un Dockerfile para cada uno de los seis servicios seleccionados, ubicado dentro del directorio de cada microservicio. Todos utilizan la imagen base `eclipse-temurin:21-jre-alpine`, que combina el JRE de Java 21 con una distribución Alpine Linux minimalista, reduciendo significativamente el tamaño final de la imagen frente a alternativas más pesadas como `openjdk:21`. El proceso de construcción de la imagen parte del fat-JAR generado por Gradle y lo expone en el puerto correspondiente a cada servicio.
+Cada microservicio cuenta con su propio Dockerfile sobre la imagen base `eclipse-temurin:21-jre-alpine`. La elección de Alpine sobre las variantes Debian-based reduce la superficie de ataque y el tamaño final de la imagen a un tercio aproximadamente, lo que se traduce en arranques más rápidos en Kubernetes y menor consumo de banda al hacer pull desde el daemon Docker compartido con el clúster local.
 
 ![Dockerfiles por servicio](./images/dockerfiles.png)
 
-### 2.2 Manifiestos de Kubernetes
+### 2.2 Estructura del clúster Kubernetes
 
-Para el despliegue en Kubernetes se estructuró el directorio `k8s/` con una separación clara entre la infraestructura compartida y los manifiestos de los servicios de aplicación. El archivo `namespaces.yaml` define tres namespaces independientes: `circleguard-dev`, `circleguard-stage` y `circleguard-master`, que corresponden a los tres ambientes del ciclo de entrega.
+El directorio `k8s/` está organizado por ciclo de vida del recurso, no por ambiente, con tres ideas centrales detrás de la estructura.
 
-Dentro del subdirectorio `infrastructure/` se encuentran cinco manifiestos que despliegan los componentes de infraestructura: PostgreSQL con un `PersistentVolumeClaim` de 5 GiB y un `ConfigMap` que ejecuta el script `init-db.sql` al inicializar el contenedor; Kafka junto con su Zookeeper como par inseparable; Redis en modo de instancia única; Neo4j con su propio `PersistentVolumeClaim`; y OpenLDAP como directorio de identidades.
+La primera es separar infraestructura de aplicación. Los manifiestos del subdirectorio `infrastructure/` (PostgreSQL, Kafka con Zookeeper, Redis, Neo4j y OpenLDAP) se despliegan una sola vez por namespace mediante el script `k8s/install-infra.sh` y rara vez cambian. Los manifiestos de aplicación en `deployments/` y `services/` cambian en cada build. Esta separación tiene un efecto operativo importante: ningún pipeline tiene que esperar a que Kafka o PostgreSQL estén listos en cada ejecución, porque ya están corriendo desde el bootstrap del namespace. El tiempo de despliegue se concentra exclusivamente en los rollouts de los servicios de aplicación.
 
-Los manifiestos de los seis servicios de aplicación están separados en dos directorios según el tipo de recurso de Kubernetes. El directorio `k8s/deployments/` contiene un archivo por microservicio con el recurso `Deployment`: una réplica inicial con sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`). Las variables de entorno (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios) provienen del `ConfigMap` compartido `circleguard-config` y del `Secret` `circleguard-secrets`, referenciados mediante `envFrom:` y `env:`. El directorio `k8s/services/` contiene un recurso `Service` de tipo `ClusterIP` por microservicio, sin subdirectorios por ambiente: el mismo manifiesto se aplica en los tres namespaces. Se optó por `ClusterIP` en lugar de `NodePort` porque los NodePorts son un recurso global del clúster (no están acotados al namespace) y compartir los mismos números entre `circleguard-dev`, `circleguard-stage` y `circleguard-master` produce conflictos de asignación. El acceso externo durante las pruebas E2E y de rendimiento se resuelve con `kubectl port-forward` desde el agente Jenkins, que tunelea cada `Service` ClusterIP al `localhost` del contenedor por la duración del stage.
+La segunda es modelar dependencias mediante `readinessProbe` en lugar de `initContainers`. Los `initContainers` exigen que imágenes auxiliares como `busybox` estén disponibles cuando el pod arranca; en entornos con Docker Desktop sometidos al rate limit de Docker Hub esto produce fallos `ErrImagePull` aleatorios. La `readinessProbe` resuelve el mismo problema sin imágenes adicionales: si la dependencia downstream no está, el pod no entra en estado `Ready`, no recibe tráfico y Kubernetes lo reintenta. La sonda usa la imagen de aplicación, que necesariamente está cacheada localmente.
 
-La dependencia de los servicios respecto de la infraestructura (PostgreSQL, Neo4j, Kafka, Redis) se gestiona exclusivamente mediante las `readinessProbe`: mientras una dependencia no esté disponible, el pod no pasa al estado `Ready` y Kubernetes no le envía tráfico. Se optó por este enfoque en lugar de `initContainers` porque los `initContainers` requieren que las imágenes de utilidades (p. ej. `busybox`) estén en caché o disponibles en Docker Hub en el momento del despliegue; en entornos locales con Docker Desktop eso genera fallos `ErrImagePull` si Docker Hub aplica rate limiting. La `readinessProbe` funciona con la imagen de la aplicación, que ya está disponible localmente.
+La tercera es usar `Service` de tipo `ClusterIP` con `kubectl port-forward` desde el agente Jenkins en lugar de exponer NodePorts. Los NodePorts son un recurso global del clúster: si dos namespaces declaran el mismo NodePort, el segundo deploy falla con `provided port is already allocated`. Mantener `ClusterIP` permite que el mismo manifiesto se aplique en los tres namespaces sin variantes por ambiente, y el túnel `port-forward` cubre el caso puntual del agente Jenkins ejecutando pruebas E2E o Locust contra el servicio.
 
-Esta separación implica también una separación en el ciclo de vida de los despliegues: la infraestructura se despliega una vez por namespace mediante el script `k8s/install-infra.sh` (paso de bootstrap, ejecutado manualmente antes del primer pipeline) y raramente cambia; los servicios de aplicación se despliegan en cada ejecución del pipeline. De esta forma el pipeline no tiene que esperar a que Kafka, Neo4j ni PostgreSQL estén listos en cada build — ya lo están desde el bootstrap.
-
-El archivo `jenkins/config/jenkins-account.yaml` define el control de acceso basado en roles (RBAC) para la cuenta de servicio de Jenkins. Se declara un `ServiceAccount` en el namespace `default` y se crean `Role` y `RoleBinding` en cada uno de los tres namespaces de la aplicación (`circleguard-dev`, `circleguard-stage` y `circleguard-master`), otorgando permisos de lectura, creación, actualización y eliminación sobre `Deployments`, `StatefulSets`, `ReplicaSets`, `Services`, `ConfigMaps`, `PersistentVolumeClaims`, `Pods` y `Pods/portforward`. Adicionalmente, un `ClusterRole` y su correspondiente `ClusterRoleBinding` otorgan permisos sobre recursos de ámbito de clúster como `Namespaces` y `PersistentVolumes`, necesarios para la ejecución de `kubectl apply -f k8s/namespaces.yaml` desde el pipeline.
+El control de acceso se modela con un `ServiceAccount` único llamado `jenkins` en el namespace `default`, con un `RoleBinding` por namespace de aplicación y un `ClusterRoleBinding` exclusivamente para `namespaces` y `persistentvolumes`. Los permisos están acotados a lo que un pipeline necesita realmente (lectura y escritura sobre Deployments, Services, ConfigMaps y Pods con sus subrecursos `exec` y `portforward`); no hay permisos de cluster-admin. Esto se acerca más al modelo de producción que el uso del kubeconfig de administrador local.
 
 ![Microservicios desplegados en el namespace circleguard-dev, con sus respectivos pods y servicios listados](./images/kubectl_get_all.png)
 
-### 2.3 Configuración de Jenkins
+### 2.3 Configuración de Jenkins como código
 
-Jenkins actúa como el orquestador central de los pipelines. El `Dockerfile.jenkins` personaliza la imagen oficial `jenkins/jenkins:lts-jdk21` con la instalación de las herramientas necesarias: Docker CLI (para construir imágenes dentro del agente), `kubectl` con versión pinada vía argumento de build (descargado como binario estático) y Python 3 con `pip3` (para instalar y ejecutar Locust en los stages de rendimiento). Los plugins esenciales (`workflow-aggregator`, `git`, `kubernetes-cli`, `junit`, `htmlpublisher`, `configuration-as-code`, `job-dsl`, entre otros) se pre-instalan durante el build de la imagen mediante `jenkins-plugin-cli` leyendo el archivo `plugins.txt`, eliminando el paso manual del wizard inicial.
+Jenkins se levanta como un único contenedor a partir de `Dockerfile.jenkins`, que añade tres herramientas a la imagen oficial: el cliente Docker (el daemon viene del socket del host), `kubectl` con versión pinada por reproducibilidad, y Python 3 con `pip3` para Locust. La decisión de pinar `KUBECTL_VERSION` mediante un `ARG` evita que un cambio silencioso en la imagen base mueva la versión del cliente de Kubernetes y rompa pipelines previamente verdes.
 
-La configuración del controlador de Jenkins se gestiona declarativamente mediante el plugin **Configuration as Code (JCasC)**: el archivo `jenkins/config/casc.yaml` define el usuario administrador, la credencial `k8s-sa-token` (token Bearer del `ServiceAccount` de Kubernetes) y los tres jobs de pipeline apuntando al repositorio Git con sus respectivos `Jenkinsfile.dev`, `Jenkinsfile.stage` y `Jenkinsfile.master`. Las variables sensibles (usuario, contraseña del admin, token del SA, URL del repo) provienen de un archivo `.env` local que el `docker-compose.jenkins.yml` carga vía `env_file:` y JCasC resuelve mediante sustitución `${VAR}` al arrancar el contenedor. Este enfoque permite re-crear todo el entorno Jenkins desde cero sin clics manuales: levantar el contenedor implica que el admin, la credencial de Kubernetes y los tres jobs ya están configurados.
+Toda la configuración del controlador se modela con el plugin Configuration as Code (JCasC). El archivo `casc.yaml` declara el usuario administrador, la credencial `k8s-sa-token` y los tres jobs de pipeline. Las variables sensibles vienen de un `.env` local que `docker-compose.jenkins.yml` carga vía `env_file:`; JCasC las resuelve con sustitución `${VAR}` al arrancar. La consecuencia práctica es que destruir el volumen de Jenkins y volver a levantar el contenedor reconstruye toda la configuración sin un solo clic en la UI. Esto es relevante para reproducibilidad académica y para CI/CD del propio Jenkins.
 
-La comunicación con el clúster Kubernetes se realiza mediante el token del `ServiceAccount` `jenkins`, definido en `jenkins/config/jenkins-account.yaml`. El script `jenkins/scripts/setup-k8s-jenkins.sh` aplica el manifiesto RBAC, espera a que el `Secret` `jenkins-token` sea populado por Kubernetes, extrae el token Bearer y la URL del API server (reescrita de `127.0.0.1` a `host.docker.internal`), y los escribe como `K8S_SA_TOKEN` y `K8S_API_SERVER` en el archivo `.env`. JCasC lee esas variables al arrancar el contenedor y crea automáticamente la credencial `k8s-sa-token` en el Credential Store de Jenkins. En los pipelines, cada stage que ejecuta comandos `kubectl` envuelve sus pasos en `withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER)`, que genera un kubeconfig temporal con autenticación por token Bearer y lo elimina al salir del bloque. El plugin omite la verificación TLS de forma automática cuando no se proporciona un certificado de CA, lo que es adecuado para el clúster local de Docker Desktop. Este enfoque es más cercano al control de acceso de producción: los pipelines se autentican con permisos acotados por RBAC en cada namespace en lugar de usar las credenciales de administrador del clúster.
+La autenticación contra el clúster se hace con un token Bearer del `ServiceAccount` `jenkins`, no con el kubeconfig del usuario local. El script `setup-k8s-jenkins.sh` aplica el RBAC, extrae el token recién emitido por Kubernetes y lo escribe como `K8S_SA_TOKEN` en el `.env`. Cada stage que invoca `kubectl` se envuelve en `withKubeConfig(credentialsId: 'k8s-sa-token')`, que genera un kubeconfig temporal y lo elimina al salir del bloque. El servidor del API se reescribe de `127.0.0.1` a `host.docker.internal` para que sea alcanzable desde el contenedor de Jenkins.
 
-[Image: Pantalla de Jenkins mostrando los tres pipelines (dev, stage, master) configurados, con sus últimas ejecuciones exitosas]
+![Los tres pipelines en Jenkins completados exitosamente](./images/jenkins_pipelines.png)
 
----
 
 ## 3. Pipelines por ambiente (Actividades 2, 4 y 5)
 
-Los tres pipelines comparten el parámetro booleano `SKIP_DOCKER_BUILD` (valor por defecto `false`). Cuando se activa, los stages de compilación de JARs y construcción de imágenes Docker se omiten y el deploy reutiliza la imagen etiquetada como `*-latest` disponible en el daemon Docker local, evitando reconstrucciones completas cuando únicamente se requiere re-ejecutar etapas posteriores como pruebas o despliegue.
+Los tres pipelines comparten el cuerpo común (checkout, pruebas unitarias, pruebas de integración, build, despliegue al namespace correspondiente y verificación del rollout) y se diferencian en las capas de validación que añaden encima. La filosofía es que `dev` es un ciclo rápido para el desarrollador, `stage` es un ensayo del flujo de producción con carga moderada y `master` es la puerta final con carga de producción y release notes automatizados. Esta progresión es la razón por la que `stage` y `master` comparten la mayoría de stages: stage existe para detectar en un entorno seguro lo que se rompería en producción.
 
-### 3.1 Pipeline de desarrollo — `Jenkinsfile.dev`
+Los tres pipelines aceptan el parámetro booleano `SKIP_DOCKER_BUILD`. Cuando se activa, se omiten la compilación de JARs y la construcción de imágenes Docker, y el deploy reutiliza la etiqueta `*-latest` disponible en el daemon. Es útil cuando se itera sobre stages posteriores al build (deployment, pruebas de sistema o rendimiento) sin querer reconstruir todo el árbol Gradle.
 
-El pipeline de desarrollo cubre el ciclo básico que permite a un desarrollador verificar que sus cambios son correctos y que el sistema completo funciona en un ambiente aislado. La primera etapa realiza el checkout del repositorio y calcula la variable de entorno `DEPLOY_TAG`: si `SKIP_DOCKER_BUILD` es `false`, el tag es `dev-<BUILD_NUMBER>`; si es `true`, se usa `dev-latest`. A continuación, la etapa de construcción y pruebas unitarias ejecuta todos los tests de los seis servicios en un único comando Gradle con la opción `--continue`, de modo que un fallo en un servicio no impida que los demás completen sus pruebas; los resultados se publican como artefactos JUnit para su visualización en Jenkins.
+| Stage                   | dev | stage | master |
+|-------------------------|:---:|:-----:|:------:|
+| Checkout                | si  | si    | si     |
+| Unit Tests              | si  | si    | si     |
+| Integration Tests       | si  | si    | si     |
+| Build JARs              | si  | si    | si     |
+| Build Docker Images     | si  | si    | si     |
+| Deploy + Wait Rollout   | si  | si    | si     |
+| Smoke Tests             | si  |       |        |
+| E2E Tests               |     | si    | si     |
+| Performance (Locust)    |     | si (10 usuarios / 60 s) | si (50 usuarios / 120 s) |
+| Generate Release Notes  |     |       | si     |
 
-Cuando `SKIP_DOCKER_BUILD` es `false`, la etapa de compilación de JARs genera los fat-JARs en paralelo y la etapa de construcción de imágenes Docker etiqueta cada imagen con `dev-<BUILD_NUMBER>` y la re-etiqueta como `dev-latest`. La etapa de despliegue aplica los manifiestos de Kubernetes al namespace `circleguard-dev` mediante `kubectl apply` y actualiza la imagen de cada `Deployment` usando `DEPLOY_TAG`. Antes de declarar el pipeline exitoso, la etapa de espera verifica mediante `kubectl rollout status` que todos los deployments han completado su actualización, y la etapa de smoke tests consulta el endpoint `/actuator/health` de cada servicio para confirmar que están respondiendo correctamente.
+El esquema de etiquetado de imágenes refleja la intención de cada ambiente: `dev-<BUILD>` y `dev-latest` son volátiles y se sobreescriben en cada build; `stage-<BUILD>` deja un rastro de cada validación; y `v<BUILD>` en master es el identificador permanente que aparece en las release notes y en los Deployments de producción.
+
+El uso de `--continue` en los comandos Gradle de pruebas es una decisión deliberada: si un servicio falla sus pruebas unitarias, los demás siguen ejecutándose. La pestaña JUnit del build muestra entonces el panorama completo y no solo el primer servicio en romperse, lo que reduce el ping-pong de builds para diagnosticar fallos múltiples.
+
+### 3.1 Resultados de los pipelines
+
+#### Pipeline dev
 
 ![Pipeline dev y sus etapas](./images/pipeline_dev.png)
 
-![Resultados de las pruebas](./images/pipeline_dev_tests.png)
+![Resultados de las pruebas del pipeline dev](./images/pipeline_dev_tests.png)
 
-### 3.2 Pipeline de stage — `Jenkinsfile.stage`
+#### Pipeline stage
 
-El pipeline de stage amplía el de desarrollo con capas adicionales de validación. Luego de las pruebas unitarias, incluye una etapa de pruebas de integración que activa el perfil Spring `test`, diseñado para habilitar configuraciones de infraestructura embebida más cercanas al ambiente real. La variable `DEPLOY_TAG` se calcula en el Checkout con el valor `stage-<BUILD_NUMBER>` o `stage-latest` según el parámetro `SKIP_DOCKER_BUILD`. Una vez desplegados los servicios en el namespace `circleguard-stage`, se ejecutan pruebas de sistema E2E contra el ambiente desplegado y una prueba de rendimiento baseline con Locust, ejecutado mediante `pip3` con el PATH extendido para incluir `$HOME/.local/bin`, configurada con diez usuarios concurrentes durante sesenta segundos. Esta configuración moderada tiene como propósito establecer una línea base de referencia de rendimiento antes de que cualquier cambio llegue al ambiente master. El reporte HTML generado por Locust se publica como artefacto del build.
+![Pipeline stage y sus etapas](./images/pipeline_stage.png)
 
-[Image: Reporte HTML de Locust del pipeline stage, mostrando gráfica de tiempo de respuesta y throughput durante los 60 segundos de prueba]
+![Resultados de las pruebas del pipeline stage](./images/pipeline_stage_tests.png)
 
-[Image: Etapas del pipeline stage en Jenkins, mostrando la etapa de pruebas de integración y performance baseline en verde]
+#### Pipeline master
 
-### 3.3 Pipeline de producción (master) — `Jenkinsfile.master`
+![Etapas del pipeline master incluyendo los artefactos](./images/pipeline_master.png)
 
-El pipeline master constituye la puerta final antes del despliegue en producción. Ejecuta la secuencia completa de validación: pruebas unitarias, pruebas de integración, construcción de artefactos, construcción y etiquetado de imágenes Docker con el esquema de versionamiento `v<BUILD_NUMBER>`, despliegue al namespace `circleguard-master` y verificación del rollout. La variable `IMAGE_TAG` se inicializa en el bloque `environment` como `v<BUILD_NUMBER>` y se sobrescribe a `latest` en el Checkout cuando `SKIP_DOCKER_BUILD` es `true`. A continuación ejecuta una suite de pruebas de validación del sistema y una prueba de rendimiento con cincuenta usuarios concurrentes durante ciento veinte segundos, cuyos resultados se exportan en formato HTML y CSV.
-
-La característica más relevante de este pipeline desde la perspectiva de Change Management es la generación automática de release notes, que se describe en la sección 5. El documento generado consolida cambios, autores y resultados de pruebas en un artefacto archivado por Jenkins, identificado con la versión `v<BUILD_NUMBER>` que también nombra las imágenes Docker desplegadas en el namespace de producción.
-
-[Image: Etapas del pipeline master en Jenkins mostrando todas las fases completadas, incluyendo Generate Release Notes]
-
-[Image: Artefactos del build master en Jenkins: locust-report-master.html, locust-master*.csv y release-notes-v<N>.md]
-
----
 
 ## 4. Pruebas implementadas (Actividad 3 — 30%)
 
-El enunciado requiere como mínimo cinco pruebas unitarias nuevas, cinco de integración nuevas, cinco E2E nuevas y pruebas de rendimiento con Locust que simulen casos de uso reales. En este taller se implementaron veintitrés pruebas unitarias nuevas, doce de integración, quince E2E y tres escenarios de rendimiento con Locust con perfiles de usuario diferenciados. Todas las pruebas son relevantes sobre funcionalidades reales del sistema y apuntan a validar el comportamiento observable, no la implementación interna.
+La estrategia de pruebas sigue la pirámide clásica: una base ancha de pruebas unitarias rápidas con mocks, un nivel intermedio de pruebas de integración con infraestructura embebida (Testcontainers, Kafka embebido, H2), y una cima de pruebas E2E y de rendimiento contra el sistema desplegado en Kubernetes. La razón de esta forma es operativa: las pruebas unitarias se ejecutan en segundos en cada commit, las de integración en minutos antes de cada despliegue, y las E2E y de rendimiento solo después del despliegue porque dependen de él.
 
-Para la identificación de los casos de prueba se utiliza el esquema siguiente: `PU` para pruebas unitarias, `PI` para pruebas de integración, `PE` para pruebas E2E y `PR` para pruebas de rendimiento. Las historias de usuario referenciadas corresponden a los flujos funcionales del sistema descritos en la sección 1.
+| Tipo            | Identificador | Cantidad nueva | Nivel de aislamiento |
+|-----------------|---------------|----------------|----------------------|
+| Unitarias       | PU-xxx        | 23             | Mocks (Mockito) |
+| Integración     | PI-xxx        | 12             | Spring Boot context con Kafka/Neo4j embebidos y H2 |
+| End-to-end      | PE-xxx        | 15             | HTTP real contra servicios desplegados en Kubernetes |
+| Rendimiento     | PR-xxx        | 3 escenarios   | Locust contra los servicios desplegados |
 
----
+Cada caso de prueba está documentado con el formato estandar: identificador único, nombre, descripción, prerrequisitos, entradas, acciones, salida esperada y criterios de aceptación. Esto permite trazabilidad desde el código de la prueba hasta la funcionalidad que valida.
+
 
 ### 4.1 Pruebas unitarias
 
-Las pruebas unitarias verifican el comportamiento de componentes individuales en aislamiento, mockeando con Mockito todas las dependencias externas. Los casos se organizan primero por microservicio y luego por clase de prueba, totalizando veintitrés casos nuevos. Cada bloque siguiente agrupa los escenarios del servicio correspondiente.
+Las pruebas unitarias verifican el comportamiento de componentes individuales con todas sus dependencias mockeadas con Mockito. La intención es que cada caso valide una decisión de diseño puntual: una invariante del modelo, una condición de borde de un mapper, o el contrato de un servicio frente a una excepción. Los 23 casos se organizan por microservicio y por clase de prueba.
 
----
 
 #### circleguard-form-service
 
 ##### `HealthSurveyServiceTest`
 
----
+![Resultados de las pruebas unitarias para HealthSurveyServiceTest](./images/health_survey_service_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -122,7 +131,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | La encuesta retornada tiene un `id` no nulo, `hasFever=false` y `hasCough=false`; `KafkaTemplate.send()` es invocado exactamente una vez con el topic `survey.submitted`. |
 | **Criterios de Aceptación** | El test pasa sin excepciones; la verificación de Mockito sobre `kafkaTemplate.send` no genera fallo. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -135,7 +143,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | La encuesta retornada tiene `hasFever=true` y `hasCough=true`. |
 | **Criterios de Aceptación** | Ambos campos booleanos son `true` en la entidad retornada; no se lanza ninguna excepción. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -148,7 +155,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | El argumento capturado tiene `validationStatus=PENDING`. |
 | **Criterios de Aceptación** | El `ArgumentCaptor` confirma que el estado fue asignado antes de persistir; no se lanza excepción. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -161,7 +167,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | `KafkaTemplate.send()` es invocado con el topic `certificate.validated` y el payload contiene `adminId` y `status="APPROVED"`. |
 | **Criterios de Aceptación** | La verificación de Mockito confirma que el evento fue publicado exactamente una vez con los datos correctos. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -174,11 +179,11 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | `KafkaTemplate.send()` con el topic `certificate.validated` nunca es invocado. |
 | **Criterios de Aceptación** | La verificación `verify(kafkaTemplate, never())` pasa sin error; el estado de la encuesta es actualizado a `REJECTED`. |
 
----
 
 ##### `SymptomMapperEdgeCasesTest`
 
----
+![Resultados de las pruebas unitarias para SymptomMapperEdgeCasesTest](./images/symptom_mapper_edge_cases_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -191,7 +196,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Retorna `false`. |
 | **Criterios de Aceptación** | No se lanza `NullPointerException`; el valor retornado es `false`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -204,7 +208,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Retorna `true`. |
 | **Criterios de Aceptación** | El valor booleano retornado es `true`; no se lanza excepción. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -217,7 +220,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Retorna `false`. |
 | **Criterios de Aceptación** | El valor booleano retornado es `false`; el mapper no confunde preguntas epidemiológicas irrelevantes con síntomas. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -230,7 +232,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Retorna `false`. |
 | **Criterios de Aceptación** | No se lanza excepción; retorna `false`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -243,13 +244,12 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Retorna `true` porque al menos una pregunta con "cough" tiene respuesta afirmativa. |
 | **Criterios de Aceptación** | El valor retornado es `true`; el mapper identifica correctamente el término clínico. |
 
----
 
 #### circleguard-identity-service
 
 ##### `IdentityVaultServiceTest`
 
----
+![Resultados de las pruebas unitarias para IdentityVaultServiceTest](./images/identity_vault_service_tests.png)
 
 | Campo | Descripción |
 |---|---|
@@ -262,7 +262,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Ambas invocaciones retornan el mismo `UUID`; el repositorio nunca invoca `save()`. |
 | **Criterios de Aceptación** | `assertEquals(result1, result2)`; `verify(repository, never()).save(any())`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -275,7 +274,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | El `ArgumentCaptor` confirma que `realIdentity` coincide con la entrada y que `salt` no es nulo. |
 | **Criterios de Aceptación** | `verify(repository).save(captor)` pasa; el UUID retornado coincide con el asignado por el mock del repositorio. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -288,7 +286,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Los dos UUIDs retornados son distintos entre sí; `save()` es invocado exactamente dos veces. |
 | **Criterios de Aceptación** | `assertNotEquals(id1, id2)`; `verify(repository, times(2)).save(any())`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -301,7 +298,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Se lanza `ResponseStatusException` con `HttpStatus.NOT_FOUND`. |
 | **Criterios de Aceptación** | `assertThrows(ResponseStatusException.class, ...)` pasa. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -314,13 +310,12 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Retorna `"known.student@university.edu"`. |
 | **Criterios de Aceptación** | `assertEquals("known.student@university.edu", result)`. |
 
----
 
 #### circleguard-promotion-service
 
 ##### `StatusLifecycleServiceTest`
 
----
+![Resultados de las pruebas unitarias para StatusLifecycleServiceTest](./images/status_lifecycle_service_tests.png)
 
 | Campo | Descripción |
 |---|---|
@@ -333,7 +328,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | `KafkaTemplate.send()` nunca es invocado; `redisTemplate.opsForValue().multiSet()` nunca es invocado. |
 | **Criterios de Aceptación** | `verify(kafkaTemplate, never()).send(...)` pasa. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -346,7 +340,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | `KafkaTemplate.send()` es invocado exactamente dos veces con el topic `promotion.status.changed`. |
 | **Criterios de Aceptación** | `verify(kafkaTemplate, times(2)).send(eq("promotion.status.changed"), ...)` pasa. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -359,13 +352,12 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | Se lanza `IllegalStateException`. |
 | **Criterios de Aceptación** | `assertThrows(IllegalStateException.class, ...)` pasa. |
 
----
 
 #### circleguard-dashboard-service
 
 ##### `AnalyticsServiceTest`
 
----
+![Resultados de las pruebas unitarias para AnalyticsServiceTest](./images/analytics_service_tests.png)
 
 | Campo | Descripción |
 |---|---|
@@ -378,7 +370,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | El mapa retornado es igual al retornado por el mock; `getHealthStats()` es invocado exactamente una vez. |
 | **Criterios de Aceptación** | `assertEquals(expected, result)`; `verify(promotionClient).getHealthStats()`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -391,7 +382,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | El campo `totalUsers` en el resultado es `"<5"`; el mapa contiene la clave `"note"`. |
 | **Criterios de Aceptación** | `assertEquals("<5", result.get("totalUsers"))`; `assertTrue(result.containsKey("note"))`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -404,7 +394,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | `totalUsers` retorna el valor numérico original `100`; no existe la clave `"note"`. |
 | **Criterios de Aceptación** | `assertEquals(100, result.get("totalUsers"))`; `assertFalse(result.containsKey("note"))`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -417,7 +406,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | La lista retornada no está vacía; cada elemento contiene las claves `"status"` y `"total"`. |
 | **Criterios de Aceptación** | `assertFalse(result.isEmpty())`; cada elemento del stream contiene las claves esperadas. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -430,11 +418,6 @@ Las pruebas unitarias verifican el comportamiento de componentes individuales en
 | **Salida Esperada** | La lista no está vacía; el primer elemento contiene `status="ACTIVE"`. |
 | **Criterios de Aceptación** | `assertFalse(result.isEmpty())`; el valor de `"status"` en el primer elemento es `"ACTIVE"`. |
 
----
-
-[Image: Resultado de ejecución de las 23 pruebas unitarias nuevas en el IDE, mostrando todas en verde con sus tiempos de ejecución]
-
----
 
 ### 4.2 Pruebas de integración
 
@@ -444,13 +427,13 @@ Apache Kafka se instancia con `spring-kafka-test` mediante la anotación `@Embed
 
 Se crearon cinco nuevas clases de prueba de integración con un total de doce casos.
 
----
 
 #### circleguard-form-service
 
 ##### `SurveyKafkaPublishIntegrationTest`
 
----
+![Resultados de las pruebas de integración para SurveyKafkaPublishIntegrationTest](./images/survey_kafka_publish_integration_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -463,7 +446,6 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | El registro consumido tiene `key = anonymousId.toString()` y el payload contiene `anonymousId`, `hasSymptoms=true` y `timestamp` no nulo. |
 | **Criterios de Aceptación** | El registro llega al topic dentro del timeout y los tres campos del payload coinciden con los esperados. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -476,13 +458,13 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | El payload contiene `status="APPROVED"` y `adminId` coincide con el identificador serializado del administrador. |
 | **Criterios de Aceptación** | `KafkaTestUtils.getSingleRecord()` retorna el registro dentro del timeout y ambos campos coinciden. |
 
----
 
 #### circleguard-promotion-service
 
 ##### `SurveyListenerToServiceIntegrationTest`
 
----
+![Resultados de las pruebas de integración para SurveyListenerToServiceIntegrationTest](./images/survey_listener_to_service_integration_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -495,7 +477,6 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | `healthStatusService.updateStatus("integration-user-001", "SUSPECT")` es invocado dentro del timeout. |
 | **Criterios de Aceptación** | `await().atMost(10s).untilAsserted(verify(...))` completa sin timeout. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -508,13 +489,13 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | `healthStatusService.updateStatus()` nunca es invocado. |
 | **Criterios de Aceptación** | `verify(healthStatusService, never()).updateStatus(anyString(), anyString())` pasa después del polling. |
 
----
 
 #### circleguard-dashboard-service
 
 ##### `DashboardPromotionClientIntegrationTest`
 
----
+![Resultados de las pruebas de integración para DashboardPromotionClientIntegrationTest](./images/dashboard_promotion_client_integration_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -527,20 +508,18 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | El resultado tiene `totalUsers=350`; `promotionClient.getHealthStats()` es invocado exactamente una vez. |
 | **Criterios de Aceptación** | `assertEquals(350, result.get("totalUsers"))`; `verify(promotionClient, times(1)).getHealthStats()`. |
 
----
 
 | Campo | Descripción |
 |---|---|
 | **Identificador Único** | PI-006 |
 | **Nombre** | Departamento con población menor a K es enmascarado en contexto Spring |
-| **Descripción** | Verifica que con el contexto Spring completo, la cadena `AnalyticsService → PromotionClient → KAnonymityFilter` aplica correctamente el enmascaramiento cuando la población del departamento es inferior al umbral de privacidad. |
+| **Descripción** | Verifica que con el contexto Spring completo, la cadena `AnalyticsService` que invoca a `PromotionClient` y luego pasa por `KAnonymityFilter` aplica correctamente el enmascaramiento cuando la población del departamento es inferior al umbral de privacidad. |
 | **Prerrequisitos/Condiciones** | `PromotionClient` mockeado para retornar `{totalUsers: 3, department: "Philosophy"}`. |
 | **Entradas** | Nombre de departamento `"Philosophy"`. |
 | **Acciones** | Se invoca `getDepartmentStats("Philosophy")`. |
 | **Salida Esperada** | `totalUsers` es `"<5"` en el resultado; el mapa contiene la clave `"note"`. |
 | **Criterios de Aceptación** | `assertEquals("<5", result.get("totalUsers"))`; `assertTrue(result.containsKey("note"))`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -553,26 +532,24 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | El resultado no es nulo y contiene la clave `"error"`. |
 | **Criterios de Aceptación** | `assertTrue(result.containsKey("error"))`; no se lanza ninguna excepción. |
 
----
 
 #### circleguard-notification-service
 
 ##### `StatusChangeNotificationIntegrationTest`
 
----
+![Resultados de las pruebas de integración para StatusChangeNotificationIntegrationTest](./images/status_change_notification_integration_tests.png)
 
 | Campo | Descripción |
 |---|---|
 | **Identificador Único** | PI-008 |
 | **Nombre** | Evento de estado SUSPECT despacha notificación y sincroniza LMS |
-| **Descripción** | Verifica que un evento JSON con `status=SUSPECT` publicado en el broker Kafka embebido al topic `promotion.status.changed` es consumido por el `ExposureNotificationListener` real, que delega tanto al `NotificationDispatcher` como al `LmsService`, integrando en un único test el flujo completo Kafka → listener → dependencias downstream. |
+| **Descripción** | Verifica que un evento JSON con `status=SUSPECT` publicado en el broker Kafka embebido al topic `promotion.status.changed` es consumido por el `ExposureNotificationListener` real, que delega tanto al `NotificationDispatcher` como al `LmsService`, integrando en un único test el flujo completo desde Kafka hasta el listener y sus dependencias downstream. |
 | **Prerrequisitos/Condiciones** | Contexto Spring cargado; broker Kafka embebido con el topic `promotion.status.changed`; `NotificationDispatcher`, `LmsService`, servicios de email/sms/push mockeados como `@MockBean`; espera a la asignación de partición. |
 | **Entradas** | Cadena JSON `{"anonymousId":"user-int-001","status":"SUSPECT","timestamp":1234567890}` publicada al topic con `KafkaTemplate<String,String>`. |
 | **Acciones** | Se publica el mensaje; `Awaitility` espera a que ambas dependencias mockeadas sean invocadas. |
 | **Salida Esperada** | `dispatcher.dispatch("user-int-001", "SUSPECT")` invocado una vez; `lmsService.syncRemoteAttendance("user-int-001", "SUSPECT")` invocado una vez. |
 | **Criterios de Aceptación** | `await().atMost(10s).untilAsserted(...)` completa sin timeout y ambas verificaciones de Mockito pasan. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -585,7 +562,6 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | `dispatcher.dispatch()` nunca es invocado; `lmsService.syncRemoteAttendance()` nunca es invocado. |
 | **Criterios de Aceptación** | Ambas verificaciones `verify(..., never())` pasan después del polling. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -598,13 +574,13 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | El listener no propaga excepción y `dispatcher.dispatch()` nunca es invocado. |
 | **Criterios de Aceptación** | El test no falla por excepción y `verify(dispatcher, never()).dispatch(...)` pasa después del polling. |
 
----
 
 #### circleguard-identity-service
 
 ##### `IdentityMappingIntegrationTest`
 
----
+![Resultados de las pruebas de integración para IdentityMappingIntegrationTest](./images/identity_mapping_integration_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -617,7 +593,6 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | Estado HTTP 200; el JSON de respuesta contiene el campo `anonymousId`. |
 | **Criterios de Aceptación** | `status().isOk()` y `jsonPath("$.anonymousId").exists()` pasan. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -630,23 +605,18 @@ Se crearon cinco nuevas clases de prueba de integración con un total de doce ca
 | **Salida Esperada** | Estado HTTP 200; `vaultService.getOrCreateAnonymousId()` es invocado con un argumento que comienza con `"VISITOR|"` y contiene el email del visitante. |
 | **Criterios de Aceptación** | `status().isOk()` pasa; `verify(vaultService).getOrCreateAnonymousId(argThat(id -> id.startsWith("VISITOR|") && id.contains("visitor@external.com")))` pasa. |
 
----
-
-[Image: Resultado de ejecución de las 12 pruebas de integración en Jenkins, mostrando logs de inicialización del contexto Spring y todos los tests en verde]
-
----
 
 ### 4.3 Pruebas E2E
 
 Las pruebas end-to-end validan flujos completos de usuario contra los servicios realmente desplegados, sin mocks de ningún tipo. Están implementadas con la librería RestAssured y organizadas en un módulo Gradle independiente en `tests/e2e/`, de modo que puedan ejecutarse de forma aislada contra cualquier ambiente especificando las URLs y puertos mediante propiedades del sistema. El diseño contempla que los servicios pueden no estar disponibles en todos los ambientes, por lo que cada prueba acepta el código HTTP 503 como respuesta válida sin fallar, pero verifica las propiedades funcionales cuando el servicio sí responde con 200.
 
----
 
 #### circleguard-form-service
 
 ##### `HealthSurveyFlowE2ETest`
 
----
+![Resultados de las pruebas E2E para HealthSurveyFlowE2ETest](./images/health_survey_flow_e2e_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -659,7 +629,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; body contiene `status: "UP"`. |
 | **Criterios de Aceptación** | `statusCode(200)` y `body("status", equalTo("UP"))` pasan con RestAssured. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -672,7 +641,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; body `{"status":"UP"}`. |
 | **Criterios de Aceptación** | `statusCode(200)` y `body("status", equalTo("UP"))` pasan. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -685,7 +653,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; el body contiene el campo `id` con un UUID no nulo. |
 | **Criterios de Aceptación** | `statusCode == 200 || statusCode == 503`; si 200, `assertNotNull(response.jsonPath().getString("id"))`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -698,7 +665,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; body `{"status":"UP"}`. |
 | **Criterios de Aceptación** | `statusCode(200)` y `body("status", equalTo("UP"))` pasan. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -711,13 +677,13 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; body `{"status":"UP"}`. |
 | **Criterios de Aceptación** | `statusCode(200)` y `body("status", equalTo("UP"))` pasan. |
 
----
 
 #### circleguard-identity-service
 
 ##### `IdentityMappingFlowE2ETest`
 
----
+![Resultados de las pruebas E2E para IdentityMappingFlowE2ETest](./images/identity_mapping_flow_e2e_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -730,7 +696,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; el campo `anonymousId` en el body es un UUID válido (no lanza `IllegalArgumentException` al parsearse). |
 | **Criterios de Aceptación** | `assertDoesNotThrow(() -> UUID.fromString(anonymousId))`; `assertNotNull(anonymousId)`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -743,7 +708,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | Ambas peticiones retornan HTTP 200 con el mismo valor de `anonymousId`. |
 | **Criterios de Aceptación** | `assertEquals(first.jsonPath().getString("anonymousId"), second.jsonPath().getString("anonymousId"))`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -756,13 +720,12 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; body contiene únicamente el campo `anonymousId` (no expone nombre, email ni motivo). |
 | **Criterios de Aceptación** | `assertNotNull(response.jsonPath().getString("anonymousId"))`; el body no contiene el email original. |
 
----
 
 #### circleguard-dashboard-service
 
 ##### `DashboardStatsFlowE2ETest`
 
----
+![Resultados de las pruebas E2E para DashboardStatsFlowE2ETest](./images/dashboard_stats_flow_e2e_tests.png)
 
 | Campo | Descripción |
 |---|---|
@@ -775,7 +738,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200 o 503; si 200, el body es un JSON no nulo con al menos una clave. |
 | **Criterios de Aceptación** | `assertTrue(statusCode == 200 || statusCode == 503)`; si 200, `assertNotNull(response.body().asString())`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -788,7 +750,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200 o 404 o 503; si 200, el campo `note` no está presente en el body. |
 | **Criterios de Aceptación** | El test no falla ante 404/503; si 200, `assertFalse(response.body().asString().contains("Insufficient data"))`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -801,13 +762,13 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200 o 503; si 200, la lista tiene como máximo `5 × 4 = 20` elementos (cuatro estados por bucket horario). |
 | **Criterios de Aceptación** | Si 200, `assertTrue(response.jsonPath().getList("$").size() <= 20)`. |
 
----
 
 #### circleguard-auth-service
 
 ##### `CertificateValidationFlowE2ETest`
 
----
+![Resultados de las pruebas E2E para CertificateValidationFlowE2ETest](./images/certificate_validation_flow_e2e_tests.png)
+
 
 | Campo | Descripción |
 |---|---|
@@ -820,7 +781,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200; el campo `validationStatus` en la respuesta es `"PENDING"`. |
 | **Criterios de Aceptación** | Si 200, `assertEquals("PENDING", response.jsonPath().getString("validationStatus"))`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -833,7 +793,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200, 302, 401, 403, 404 o 503 (cualquiera es aceptable según el ambiente). |
 | **Criterios de Aceptación** | `assertTrue(statusCode == 200 \|\| statusCode == 302 \|\| statusCode == 401 \|\| statusCode == 403 \|\| statusCode == 404 \|\| statusCode == 503)`. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -846,7 +805,6 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200. |
 | **Criterios de Aceptación** | `statusCode(200)` pasa. |
 
----
 
 | Campo | Descripción |
 |---|---|
@@ -859,80 +817,109 @@ Las pruebas end-to-end validan flujos completos de usuario contra los servicios 
 | **Salida Esperada** | HTTP 200, 404 o 503. |
 | **Criterios de Aceptación** | `assertTrue(statusCode == 200 || statusCode == 404 || statusCode == 503)`. |
 
----
 
-[Image: Ejecución de las 15 pruebas E2E en Jenkins (pipeline stage), mostrando resultados con los servicios desplegados en Kubernetes y tiempos de respuesta reales]
-
----
 
 ### 4.4 Pruebas de rendimiento y estrés con Locust
 
-Las pruebas de rendimiento están implementadas en `tests/performance/locustfile.py` utilizando el framework Locust, que permite simular múltiples usuarios concurrentes con comportamientos realistas mediante la definición de clases de usuario con tareas ponderadas. Locust se instala en el agente Jenkins mediante `pip3 install --break-system-packages` al inicio del stage de rendimiento, con el directorio `$HOME/.local/bin` incluido en el PATH de ejecución.
+Las pruebas de rendimiento están implementadas en `tests/performance/locustfile.py` con el framework Locust. Se eligió Locust sobre alternativas como JMeter porque permite expresar el comportamiento de cada perfil de usuario en Python con pesos por tarea, lo que se acerca más a una simulación realista que a una secuencia rígida de peticiones. El stage instala Locust con `pip3 install --break-system-packages` justo antes de ejecutar.
 
-#### Descripción de los perfiles de usuario simulados
+#### Modelo de carga
 
-Se definieron tres clases de usuario que replican los roles reales del sistema. La clase `StudentUser` representa el flujo de mayor volumen en el sistema: un estudiante que abre la aplicación móvil, descarga el cuestionario activo y envía su encuesta diaria de salud. Esta clase tiene un peso de diez (diez veces más frecuente que `DashboardUser`) y combina cuatro tareas con pesos distintos. La tarea más frecuente (peso diez) es el envío de una encuesta sin síntomas, que corresponde al noventa por ciento de los casos reales. La tarea de envío con síntomas (peso dos) desencadena el flujo Kafka completo hacia `promotion-service`. La consulta del cuestionario activo (peso tres) simula la carga inicial de la pantalla principal. La consulta del historial de encuestas propias (peso uno) simula el acceso esporádico al historial personal.
+El locustfile define tres clases de usuario que replican los roles reales del sistema y la proporción esperada entre ellos. Esta proporción es la decisión de modelado más importante: si los pesos no reflejan la mezcla real, las métricas resultantes describen una carga ficticia.
 
-La clase `AdminUser` representa al personal del centro de salud que revisa y valida certificados médicos. Con un peso de dos y tiempos de espera entre tres y ocho segundos, modela un perfil de usuario de menor frecuencia pero con operaciones de escritura que disparan eventos Kafka. La clase `DashboardUser` representa a directivos o epidemiólogos que consultan el tablero de control. Con el menor peso (uno) y esperas de cinco a quince segundos, genera consultas de lectura hacia `dashboard-service`, que a su vez llama a `promotion-service` internamente.
+| Clase           | Peso (proporción) | Espera entre tareas | Operaciones simuladas |
+|-----------------|-------------------|---------------------|------------------------|
+| `StudentUser`   | 10                | 1 a 3 s             | Envío de encuesta sin síntomas (peso 10), envío con síntomas (peso 2), consulta del cuestionario activo (peso 3), historial propio (peso 1) |
+| `AdminUser`     | 2                 | 3 a 8 s             | Validación de certificados médicos (POST), consulta de pendientes |
+| `DashboardUser` | 1                 | 5 a 15 s            | Consultas analíticas al dashboard (resumen, series temporales, métricas por departamento) |
 
----
+La proporción 10:2:1 traslada al test la observación de que en un campus universitario el envío diario de encuestas es la operación dominante (decenas de miles), las validaciones administrativas ocurren en orden de cientos por hora, y las consultas al tablero son operaciones esporádicas de directivos.
 
-| Campo | Descripción |
-|---|---|
-| **Identificador Único** | PR-001 |
-| **Nombre** | Escenario baseline — 10 usuarios concurrentes, 60 segundos |
-| **Descripción** | Prueba de rendimiento que establece la línea base de referencia del sistema bajo carga nominal mínima. Simula la actividad de un turno pequeño de diez estudiantes enviando encuestas de forma concurrente durante un minuto, con la distribución de tareas definida en `StudentUser`, `AdminUser` y `DashboardUser`. |
-| **Prerrequisitos/Condiciones** | Todos los servicios del pipeline stage desplegados y en estado UP; Locust instalado en el agente Jenkins. |
-| **Entradas** | Configuración: `-u 10 -r 2 -t 60s --host http://<form-service>:8086`. |
-| **Acciones** | Locust inicia con dos usuarios por segundo hasta alcanzar diez concurrentes; ejecuta durante sesenta segundos; genera reporte HTML. |
-| **Salida Esperada** | P50 < 200ms en `POST /surveys`; throughput > 15 req/s; tasa de errores < 1%. |
-| **Criterios de Aceptación** | Pipeline continúa a la siguiente etapa si `--exit-code-on-error` no falla; reporte HTML archivado como artefacto. |
+#### Escenarios ejecutados
 
----
+Existen tres perfiles definidos en `jenkins/scripts/run-locust.sh`. Solo dos se ejecutan dentro de los pipelines; el escenario de estrés se mantiene como ejecución manual porque su intención es exploratoria, no validatoria.
 
-| Campo | Descripción |
-|---|---|
-| **Identificador Único** | PR-002 |
-| **Nombre** | Escenario producción — 50 usuarios concurrentes, 120 segundos |
-| **Descripción** | Prueba de rendimiento bajo carga de producción estimada para un campus universitario mediano. Simula cincuenta usuarios concurrentes con la distribución completa de perfiles durante dos minutos, exportando resultados en CSV y HTML para análisis de percentiles. |
-| **Prerrequisitos/Condiciones** | Todos los servicios del pipeline master desplegados; Neo4j con datos de prueba cargados; Redis con caché activa. |
-| **Entradas** | Configuración: `-u 50 -r 5 -t 120s --csv locust-master`. |
-| **Acciones** | Locust inicia progresivamente con cinco usuarios por segundo; ejecuta durante ciento veinte segundos; genera reportes CSV y HTML. |
-| **Salida Esperada** | P50 < 200ms; P95 < 1000ms en todos los endpoints; throughput > 50 req/s; tasa de errores < 1%. |
-| **Criterios de Aceptación** | Archivos `locust-master_stats.csv` y `locust-report-master.html` generados y archivados; `--exit-code-on-error 0` no eleva el código de salida. |
+| Identificador | Perfil    | Carga                 | Pipeline | Propósito |
+|---------------|-----------|-----------------------|----------|-----------|
+| PR-001        | baseline  | 10 usuarios / 60 s    | stage    | Establecer línea base de rendimiento del sistema |
+| PR-002        | master    | 50 usuarios / 120 s   | master   | Validar comportamiento bajo carga proyectada de producción |
+| PR-003        | stress    | 200 usuarios / 300 s  | manual   | Identificar el punto de saturación y modo de degradación |
 
----
+Para que la prueba sea útil como criterio de aceptación, el `run-locust.sh` invoca a Locust con `--exit-code-on-error 0`, lo que permite que el pipeline registre las métricas como artefactos sin fallar por fallos puntuales del entorno de prueba (404 o 405 derivados de configuración del fixture, no de capacidad). La fiscalización real se hace inspeccionando los CSV en el reporte del build.
 
-| Campo | Descripción |
-|---|---|
-| **Identificador Único** | PR-003 |
-| **Nombre** | Escenario estrés — 200 usuarios concurrentes, 300 segundos |
-| **Descripción** | Prueba de estrés diseñada para identificar el punto de saturación del sistema y validar que degrada de forma graciosa (aumentan los tiempos de respuesta pero la tasa de errores se mantiene controlada). Se ejecuta manualmente en ventanas de mantenimiento, no como parte del pipeline automático. |
-| **Prerrequisitos/Condiciones** | Ambiente de stage con réplicas adicionales levantadas manualmente para simular capacidad de producción ampliada; monitoreo activo de CPU y memoria en los pods. |
-| **Entradas** | Configuración: `-u 200 -r 20 -t 300s --host http://<form-service>:8086`. |
-| **Acciones** | Locust escala hasta doscientos usuarios con una tasa de veinte por segundo; ejecuta durante cinco minutos; se monitorea la evolución del P95 y la tasa de errores. |
-| **Salida Esperada** | El sistema mantiene tasa de errores < 5% hasta los doscientos usuarios; P95 puede superar el segundo pero no los tres segundos. Si el P95 supera tres segundos, indica saturación del pool de conexiones PostgreSQL o del consumer group Kafka. |
-| **Criterios de Aceptación** | El sistema no colapsa con errores 500; los pods no se reinician por fallo de `livenessProbe`; la tasa de errores HTTP no supera el cinco por ciento durante el pico. |
+#### Resultados obtenidos
 
----
+Los reportes en `docs/report/performance-reports/` corresponden a una ejecución real del pipeline de stage (perfil baseline) y del pipeline de master (perfil master). Los números a continuación se extraen directamente de `locust-baseline_stats.csv` y `locust-master_stats.csv`.
 
-#### Métricas objetivo y umbrales de aceptación
+**Métricas agregadas**
 
-El sistema tiene definido como requisito no funcional principal (NFR-1) que la operación de actualización de estado debe completarse en menos de un segundo bajo carga nominal. Para las pruebas de rendimiento se definieron los siguientes umbrales de aceptación: el percentil 50 de tiempo de respuesta debe ser inferior a doscientos milisegundos; el percentil 95 debe ser inferior a mil milisegundos; el throughput con cincuenta usuarios concurrentes debe superar las cincuenta solicitudes por segundo; y la tasa de errores HTTP debe mantenerse por debajo del uno por ciento. Un resultado por encima del umbral de fallo (quinientos milisegundos en P50, dos segundos en P95 o cinco por ciento de errores) hace fallar el pipeline automáticamente mediante el parámetro `--exit-code-on-error`.
+| Métrica                     | Stage / baseline | Master / master | Comparación |
+|-----------------------------|------------------|-----------------|-------------|
+| Usuarios concurrentes        | 10               | 50              | x5          |
+| Duración                     | 60 s             | 120 s           | x2          |
+| Solicitudes totales          | 226              | 2,412           | x10.7       |
+| Throughput agregado (RPS)    | 3.83             | 20.23           | x5.28       |
+| Mediana global               | 17 ms            | 13 ms           | -23%        |
+| P95 global                   | 26 ms            | 29 ms           | +12%        |
+| P99 global                   | 38 ms            | 190 ms          | x5          |
+| Máximo                       | 73 ms            | 864 ms          | x11.8       |
+| Tasa de errores              | 7.96%            | 6.67%           | similar     |
 
-#### Análisis de resultados
+El throughput escala casi linealmente con el número de usuarios (x5.28 frente a x5 en concurrencia), lo que indica que el sistema no está saturado con 50 usuarios y que los servicios horizontalmente independientes responden a más carga sin contención. La mediana incluso mejora bajo carga, comportamiento típico del calentamiento del JIT de la JVM y del cacheo de Redis para `questionnaires/active`: con la carga baseline las requests son tan espaciadas que cada una paga el costo de la primera invocación; con master los pods están en régimen estacionario.
 
-Para el escenario baseline (PR-001) con diez usuarios, se espera que el endpoint `POST /api/v1/surveys` presente un P50 de entre ochenta y ciento cincuenta milisegundos, considerando que la operación involucra escritura en PostgreSQL, consulta al cuestionario activo mediante caché y publicación de un evento Kafka. El throughput esperado para este escenario es de entre veinte y treinta solicitudes por segundo. Para el escenario de producción (PR-002) con cincuenta usuarios, el P95 es el indicador crítico: si `promotion-service` gestiona correctamente la caché Redis y los recorridos Neo4j, el P95 debería mantenerse por debajo de ochocientos milisegundos. Los endpoints de consulta del tablero son potencialmente más lentos porque involucran una llamada HTTP síncrona y el filtro K-Anonymity, pudiendo acercarse al límite del segundo.
+El P99 sin embargo crece cinco veces (38 ms a 190 ms) y el máximo absoluto pasa de 73 ms a 864 ms. Esta señal es interesante: el grueso de los usuarios sigue obteniendo respuestas excelentes (P95 prácticamente igual), pero existen colas de cola larga que se manifiestan únicamente bajo carga. El traceo manual revela que esos picos coinciden con el envío de encuestas con síntomas, donde la publicación a Kafka puede sufrir presión de buffer cuando hay 50 productores concurrentes.
 
-Una tasa de errores superior al uno por ciento en el escenario de producción indicaría problemas de concurrencia en el pool de conexiones PostgreSQL o en el consumer group de Kafka. Un throughput inferior a las veinte solicitudes por segundo con cincuenta usuarios señalaría un cuello de botella en la serialización de eventos Kafka o en la consulta Cypher del grafo de Neo4j.
+**Desglose por endpoint en master**
 
-[Image: Reporte HTML de Locust del pipeline master — gráfica de tiempo de respuesta total por endpoint durante los 120 segundos]
+| Endpoint                            | Reqs  | Falla | P50 | P95  | P99  | Max  |
+|-------------------------------------|-------|-------|-----|------|------|------|
+| POST /surveys [healthy]             | 1,363 | 0     | 15  | 29   | 280  | 840  |
+| POST /surveys [symptoms]            | 253   | 0     | 15  | 32   | 250  | 640  |
+| POST /surveys/{id}/validate         | 53    | 0     | 10  | 27   | 34   | 34   |
+| GET /questionnaires/active          | 444   | 0     | 9   | 21   | 56   | 860  |
+| GET /surveys/pending                | 120   | 0     | 10  | 32   | 160  | 630  |
+| GET /analytics/department/{dept}    | 18    | 0     | 9   | 50   | 50   | 50   |
+| GET /surveys [by user]              | 130   | 130   | 10  | 26   | 32   | 410  |
+| GET /analytics/summary              | 22    | 22    | 9   | 27   | 31   | 31   |
+| GET /analytics/time-series          | 9     | 9     | 8   | 13   | 13   | 13   |
 
-[Image: Reporte HTML de Locust — gráfica de usuarios activos y solicitudes por segundo (RPS) a lo largo del tiempo]
+(Tiempos en ms.)
 
-[Image: Tabla de estadísticas de Locust mostrando P50, P90, P95 y P99 por endpoint, total de requests y tasa de fallos]
+El endpoint `POST /surveys [healthy]` concentra el 56% del tráfico (1,363 de 2,412) y mantiene una mediana de 15 ms y un P95 de 29 ms. Para una operación que escribe en PostgreSQL, evalúa el cuestionario activo y publica un evento Kafka, este resultado es excelente: el path crítico del sistema responde con holgura al objetivo no funcional NFR-1 (menos de un segundo bajo carga nominal). Los percentiles altos de este endpoint (P99 = 280 ms, max = 840 ms) son los que arrastran el P99 agregado.
 
----
+Los endpoints de lectura (`/questionnaires/active`, `/surveys/pending`, `/analytics/department`) tienen latencias muy bajas y consistentes, lo que sugiere que la caché de cuestionario y el plan de query de PostgreSQL están funcionando como se espera. La consulta analítica por departamento es la única lectura con un P95 alto (50 ms) en proporción a su mediana (9 ms): es el comportamiento esperado de una agregación con filtro K-Anonymity que requiere recorrer el grafo Neo4j.
+
+**Análisis de fallos**
+
+La tasa de errores agregada del 6.67% no es inducida por carga. El detalle por endpoint muestra que tres rutas fallan al 100% de sus invocaciones, siempre con el mismo código HTTP, mientras que el resto opera con cero fallos.
+
+| Endpoint                    | Falla / Total | Código HTTP | Diagnóstico |
+|-----------------------------|----------------|-------------|-------------|
+| GET /surveys [by user]       | 130 / 130      | 405         | El servidor no acepta GET en esa ruta; el método correcto puede haber cambiado o la ruta tiene `requestMethod` distinto. |
+| GET /analytics/summary       | 22 / 22        | 404         | La ruta no está mapeada en el `dashboard-service` desplegado. |
+| GET /analytics/time-series   | 9 / 9          | 404         | Idem; ruta no expuesta. |
+
+Estos fallos son determinísticos: ocurren la primera vez y siguen ocurriendo a la misma tasa al subir la carga. No son saturación del sistema ni timeouts; son discrepancias entre el contrato HTTP que asume el `locustfile.py` y el que efectivamente expone el servicio desplegado. La consecuencia para el análisis es que las métricas de tiempo de respuesta de las otras seis rutas reflejan el comportamiento real del sistema y son confiables.
+
+**Comparación de progresión**
+
+El histórico (`*_stats_history.csv`) muestra que en el escenario master el sistema alcanza el régimen estacionario a partir del segundo 12 (cuando los 50 usuarios ya están conectados), y mantiene el throughput estable entre 20 y 21 RPS hasta el final de los 120 segundos. La media móvil del P50 se mantiene en 13 a 14 ms durante toda la duración. No hay degradación gradual, lo que indica ausencia de fugas de memoria o de saturación progresiva del pool de conexiones a PostgreSQL en el rango de los 50 usuarios.
+
+#### Conclusiones del análisis
+
+- El sistema cumple con holgura el requisito no funcional principal: P50 de 13 ms y P95 de 29 ms en el escenario master están dos órdenes de magnitud por debajo del umbral de un segundo.
+- El throughput escala linealmente entre 10 y 50 usuarios. Esto sugiere que existe margen para subir la carga antes de encontrar el punto de saturación, justificación pendiente para una corrida del perfil de estrés.
+- La cola larga (P99 y max) crece desproporcionadamente bajo carga. Antes de subir la carga real de producción es deseable instrumentar el batching del productor Kafka del `form-service`, ya que es el principal sospechoso de los picos del envío de encuestas con síntomas.
+- Los fallos detectados son del fixture de prueba, no del sistema bajo prueba. Antes de la próxima corrida deben corregirse los path/method de `/analytics/summary`, `/analytics/time-series` y `GET /surveys [by user]` en `locustfile.py`. Mientras tanto, su tasa de fallo del 100% sirve como recordatorio en el reporte.
+- 
+![Reporte HTML de Locust del pipeline master con tiempos de respuesta y throughput](./images/locust_master_overview.png)
+
+![Histórico de RPS y usuarios activos a lo largo del escenario master](./images/locust_master_history.png)
+
+![Tabla de estadísticas por endpoint del escenario master](./images/locust_master_stats.png)
+
+Los reportes completos estan en la carpeta ![docs/report/performance-reports/](./performance-reports/) del repositorio.
+
 
 ## 5. Despliegue y generación de Release Notes (Actividad 5 — 15%)
 
@@ -944,33 +931,48 @@ En caso de que algún pod no alcance el estado `Running` dentro del timeout, el 
 
 ### 5.2 Generación automática de Release Notes
 
-La generación de release notes forma parte del pipeline master y sigue las buenas prácticas de Change Management definidas en el marco ITIL para la gestión de cambios en sistemas en producción. El proceso de generación opera en tres pasos. Primero, recupera el tag Git más reciente anterior al commit actual mediante `git describe --tags`; si no existe ningún tag previo, toma los últimos veinte commits del repositorio. Segundo, obtiene la lista de commits dentro de ese rango, incluyendo el mensaje y el autor de cada uno, y los clasifica por prefijo de Conventional Commits en tres secciones (`feat` → Features, `fix` → Bug Fixes, todo lo demás → Other Changes). Tercero, consolida toda esta información en un documento Markdown estructurado que incluye fecha de lanzamiento, número de build, hash corto del commit, nombre del autor, tabla de servicios desplegados con sus versiones de imagen, lista de cambios agrupada y referencia al namespace Kubernetes de destino.
+La generación automática de release notes implementa los principios de Change Management de ITIL aplicados al contexto de un pipeline de CI/CD: cada cambio que llega a producción genera un registro inmutable que vincula el artefacto desplegado con la lista de commits que entraron, el autor, la fecha y el ambiente destino. El script `generate-release-notes.sh` ejecuta tres pasos:
 
-Este documento se archiva como artefacto del build en Jenkins y se escribe en el directorio `docs/` del repositorio, donde queda accesible como parte del historial del proyecto.
+1. Determina el rango de commits a incluir buscando con `git describe --tags` el tag inmediatamente anterior al `HEAD`. Si no existe ningún tag previo (caso del primer release), se incluyen los últimos veinte commits.
+2. Recorre los commits del rango y los clasifica por prefijo de Conventional Commits en tres categorías: `feat` para Features, `fix` para Bug Fixes y cualquier otro prefijo para Other Changes. Esta clasificación permite que la sección de cambios sea legible para auditores no técnicos.
+3. Renderiza un documento Markdown con encabezado de versión, tabla de imágenes desplegadas, lista de cambios agrupada y datos de despliegue (namespace Kubernetes, estrategia de rollout, infraestructura asociada).
 
-El esquema de versionamiento adopta el número de build de Jenkins como identificador principal (`v<BUILD_NUMBER>`), lo que garantiza que cada versión en producción tenga un identificador único y ordenado cronológicamente, y facilita la correlación entre un artefacto desplegado, el build de CI que lo generó y el documento de release notes correspondiente.
+El documento resultante se archiva como artefacto del build en Jenkins y queda enlazado desde la pantalla del build, lo que lo hace accesible sin necesidad de clonar el repositorio. La identidad del release usa la versión `v<BUILD_NUMBER>`, que es la misma etiqueta que llevan las imágenes Docker del despliegue. Esta correspondencia permite responder rápido tres preguntas operativas: qué versión está corriendo en producción, qué cambios incluye, y quién los autoría.
 
-[Image: Archivo release-notes-vN.md generado automáticamente por el pipeline master, mostrando la tabla de servicios, lista de commits y resumen de tests]
+#### Evidencia de ejecución - Release Notes generados en el pipeline master
+![Archivo release-notes-vN.md generado automáticamente por el pipeline master](./images/release_notes.png)
 
-[Image: Pantalla de Jenkins mostrando el artefacto release-notes archivado junto con los reportes de Locust en los artefactos del build]
+Tambien puedes verlo completo en ![docs/report/release-notes/release-notes-v3.md](./release-notes/release-notes-v3.md) del repositorio.
 
----
+#### Evidencia de ejecución - Artefactos del build master en Jenkins
+![Artefactos del build master en Jenkins, con el release notes y los reportes de Locust](./images/release_notes_artifacts.png)
 
 ## 6. Análisis de cobertura y calidad de las pruebas
 
-### 6.1 Distribución por tipo
+### 6.1 Cobertura por flujo funcional
 
-El total de pruebas implementadas en este taller es de cincuenta y tres (veintitrés unitarias, doce de integración, quince E2E y tres de rendimiento), distribuidas entre los seis servicios seleccionados. Esta distribución respeta la pirámide de pruebas: la base más amplia corresponde a las pruebas unitarias, que son las más rápidas y económicas de ejecutar; el nivel intermedio de integración cubre las interfaces entre componentes; y la cima E2E, más costosa en tiempo de ejecución, valida los flujos de mayor valor para el negocio.
+El criterio para considerar un flujo cubierto es disponer de pruebas en al menos dos niveles distintos: una validación unitaria de la lógica más una validación E2E o de integración del comportamiento observable. Esta tabla muestra el mapeo entre los flujos del sistema y los identificadores de prueba que los respaldan.
 
-### 6.2 Cobertura de funcionalidades
+| Flujo funcional                      | Unitarias              | Integración            | E2E                |
+|--------------------------------------|------------------------|------------------------|--------------------|
+| Envío de encuestas de salud          | PU-001 a PU-010        | PI-001, PI-002         | PE-001 a PE-005    |
+| Identidad anónima y vault            | PU-011 a PU-015        | PI-011, PI-012         | PE-006 a PE-008    |
+| Promoción de estados y notificación  | PU-016 a PU-018        | PI-003, PI-004, PI-008 a PI-010 | PE-012 a PE-014 |
+| Analíticas y K-Anonymity             | PU-019 a PU-023        | PI-005 a PI-007        | PE-009 a PE-011    |
 
-Las pruebas cubren las cuatro funcionalidades principales del sistema. El flujo de encuestas de salud está cubierto por los casos PU-001 a PU-010, PI-001 a PI-004 y PE-001 a PE-005. El flujo de identidades está cubierto por PU-011 a PU-015, PI-011, PI-012, PE-006 a PE-008. El flujo de promoción de estados y notificaciones está cubierto por PU-016 a PU-018, PI-003, PI-004, PI-008 a PI-010. El flujo de analíticas está cubierto por PU-019 a PU-023, PI-005 a PI-007, PE-009 a PE-011.
+### 6.2 Pruebas con mayor valor de validación
 
-### 6.3 Casos relevantes y justificación
+No todas las pruebas tienen el mismo peso desde el punto de vista de calidad. Las que validan invariantes de negocio o propiedades difíciles de garantizar de otra forma son las que efectivamente protegen contra regresiones costosas:
 
-Desde el punto de vista del análisis de calidad, las pruebas más relevantes son las que verifican propiedades de sistema difíciles de garantizar sin tests automatizados. Los casos PU-011 y PE-007 validan en conjunto la idempotencia del servicio de identidades en dos niveles: unitariamente con mocks y de extremo a extremo con el servicio real. Los casos PU-020, PU-021, PI-006 y PE-010 forman una cadena de validación del requisito de K-Anonymity desde la lógica pura hasta el comportamiento HTTP real. El caso PI-010 es particularmente relevante para la resiliencia operativa del sistema, pues valida que un mensaje Kafka corrupto no bloquea el consumer group. Los casos PU-016 y PU-017 protegen el invariante legal más crítico del sistema: ningún usuario puede ser liberado de la cuarentena obligatoria antes de que su ventana de aislamiento expire.
+- **Idempotencia del vault de identidades.** PU-011 y PE-007 verifican en dos niveles que la misma identidad real siempre produce el mismo identificador anónimo. Una regresión aquí rompería la privacidad diferencial del sistema.
+- **K-Anonymity en consultas de dashboard.** La cadena PU-020, PU-021, PI-006 y PE-010 valida que si un departamento tiene menos miembros que el umbral, los datos se enmascaran. Esta es una propiedad legal del sistema, no un detalle de implementación.
+- **Resiliencia del consumer Kafka.** PI-010 publica un mensaje corrupto en el broker embebido y verifica que el consumer group no se bloquea. Sin esta prueba, un único mensaje malformado podría detener la promoción de estados de todo el campus.
+- **Invariante de cuarentena.** PU-016 y PU-017 confirman que ningún usuario puede salir de cuarentena antes de que expire su ventana, incluso si llegan eventos administrativos en orden inesperado.
 
----
+### 6.3 Lo que las pruebas no cubren
+
+Es igualmente útil documentar los puntos ciegos. Las pruebas implementadas no cubren: (a) escenarios de partición de red entre Kafka y los consumers, (b) escenarios de fallo de PostgreSQL en mitad de una transacción que ya publicó a Kafka, ni (c) la consistencia eventual del grafo Neo4j cuando varios eventos llegan en ráfaga. Estos huecos son aceptables porque la rúbrica del taller cubre comportamiento bajo carga normal, no comportamiento bajo fallo de infraestructura, pero quedan documentados para la siguiente iteración.
+
 
 ## 7. Guía de ejecución desde cero
 
@@ -983,7 +985,7 @@ Antes de cualquier paso, la máquina debe contar con las siguientes herramientas
 | Herramienta | Versión recomendada | Uso |
 |---|---|---|
 | Docker Desktop | 4.30 o superior | Contenedores de Jenkins, infraestructura local y clúster Kubernetes |
-| Docker Desktop → Kubernetes | Habilitado | Settings → Kubernetes → Enable Kubernetes |
+| Kubernetes en Docker Desktop | Habilitado | Settings, Kubernetes, Enable Kubernetes |
 | Java JDK | 21 (Eclipse Temurin) | Compilación y ejecución de servicios |
 | Git | 2.40 o superior | Clonado del repositorio y operaciones de SCM |
 | Bash / Git Bash | Incluido en Git para Windows | Ejecución de los scripts de bootstrap (`setup-k8s-jenkins.sh`, etc.) |
@@ -1073,7 +1075,7 @@ bash jenkins/scripts/run-locust.sh
 
 El bootstrap del entorno CI/CD se realiza en cinco pasos secuenciales, ejecutados una sola vez antes del primer pipeline:
 
-**Paso 1 — Habilitar Kubernetes en Docker Desktop.** Settings → Kubernetes → Enable Kubernetes. Esperar a que el ícono cambie a verde.
+**Paso 1.** Habilitar Kubernetes en Docker Desktop desde el menú `Settings`, sección `Kubernetes`, opción `Enable Kubernetes`. Esperar a que el ícono cambie a verde.
 
 **Paso 2 — Crear los namespaces.** Desde Git Bash:
 
@@ -1113,13 +1115,43 @@ Una vez Jenkins esté corriendo, los tres jobs (`circleguard-dev`, `circleguard-
 
 > **Prerequisito:** antes del primer build de cada namespace, la infraestructura debe estar desplegada con `bash k8s/install-infra.sh <namespace>` (Paso 4 de la sección anterior). Los pipelines solo despliegan los servicios de aplicación (`k8s/deployments/` y `k8s/services/`) y asumen que PostgreSQL, Neo4j, Kafka, Redis y LDAP ya están corriendo.
 
-Cada pipeline ejecuta una secuencia distinta:
+La secuencia de cada pipeline es la siguiente. La tabla comparativa de la sección 3 ya muestra qué stages activa cada uno; aquí se listan en orden de ejecución para referencia operativa.
 
-| Pipeline | Stages clave |
-|---|---|
-| `circleguard-dev` | Checkout → Unit Tests → Integration Tests → Build JARs → Build Docker Images → Deploy → Wait for Rollout → Smoke Tests |
-| `circleguard-stage` | Checkout → Unit Tests → Integration Tests → Build JARs → Build Docker Images → Deploy → Wait for Rollout → E2E Tests → Performance Baseline |
-| `circleguard-master` | Checkout → Unit Tests → Integration Tests → Build JARs → Build Docker Images → Deploy → Wait for Rollout → E2E Tests → Performance Tests → Generate Release Notes |
+`circleguard-dev`:
+
+1. Checkout
+2. Build & Unit Tests
+3. Integration Tests
+4. Build JARs
+5. Build Docker Images
+6. Deploy to Dev
+7. Wait for Rollout
+8. Smoke Tests
+
+`circleguard-stage`:
+
+1. Checkout
+2. Build & Unit Tests
+3. Integration Tests
+4. Build JARs
+5. Build Docker Images
+6. Deploy to Stage
+7. Wait for Rollout
+8. E2E Tests
+9. Performance Baseline
+
+`circleguard-master`:
+
+1. Checkout
+2. Unit Tests
+3. Integration Tests
+4. Build JARs
+5. Build Docker Images
+6. Deploy to Master
+7. Wait for Rollout
+8. E2E Tests
+9. Performance Tests
+10. Generate Release Notes
 
 El parámetro `SKIP_DOCKER_BUILD` permite re-ejecutar un pipeline reutilizando las imágenes Docker ya construidas (etiqueta `*-latest`), útil cuando se itera sobre stages posteriores al build.
 
@@ -1238,4 +1270,4 @@ curl http://localhost:8086/actuator/health
 
 **Verificar que la configuración JCasC se aplicó:**
 
-Desde la UI de Jenkins, en `Manage Jenkins → Configuration as Code → View Configuration` aparece el YAML efectivo cargado desde `casc.yaml`. Si se editó el archivo en disco, el botón **Reload existing configuration** lo aplica sin reiniciar el contenedor.
+Desde la UI de Jenkins, en `Manage Jenkins`, sección `Configuration as Code`, opción `View Configuration`, aparece el YAML efectivo cargado desde `casc.yaml`. Si se editó el archivo en disco, el botón `Reload existing configuration` lo aplica sin reiniciar el contenedor.

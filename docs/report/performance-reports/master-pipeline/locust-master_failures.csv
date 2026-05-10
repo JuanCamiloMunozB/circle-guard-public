@@ -1,0 +1,4 @@
+Method,Name,Error,Occurrences
+GET,GET /analytics/time-series,CatchResponseError('Unexpected: 404'),9
+GET,GET /analytics/summary,CatchResponseError('Unexpected: 404'),22
+GET,GET /surveys [by user],CatchResponseError('Unexpected: 405'),130
