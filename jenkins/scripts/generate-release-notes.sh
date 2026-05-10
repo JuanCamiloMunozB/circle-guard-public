@@ -62,31 +62,16 @@ while IFS='|' read -r subject author; do
     esac
 done <<< "$ALL_COMMITS"
 
-# Renders one section, omitting it entirely if the bucket is empty.
-section() {
-    local title="$1"
-    local body="$2"
-    if [[ -n "$body" ]]; then
-        printf '### %s\n\n%s\n' "$title" "$body"
-    fi
-}
-
+# Renders the bucketed commits into the CHANGES variable, keeping a blank line
+# between sections (command substitution would strip the trailing \n).
 CHANGES=""
-CHANGES+="$(section 'Features' "$FEATURES")"
-CHANGES+="$(section 'Bug Fixes' "$FIXES")"
-CHANGES+="$(section 'Other Changes' "$OTHER")"
+[[ -n "$FEATURES" ]] && CHANGES+="### Features"$'\n\n'"$FEATURES"$'\n'
+[[ -n "$FIXES" ]]    && CHANGES+="### Bug Fixes"$'\n\n'"$FIXES"$'\n'
+[[ -n "$OTHER" ]]    && CHANGES+="### Other Changes"$'\n\n'"$OTHER"$'\n'
 
 if [[ -z "$CHANGES" ]]; then
     CHANGES="_No commits in range ${RANGE_LABEL}._"
 fi
-
-# --- Test totals --------------------------------------------------------------
-TESTS_TOTAL="$(grep -rh '<testsuite ' build/ services/*/build/ 2>/dev/null \
-    | grep -oP 'tests="\K[0-9]+' | paste -sd+ - | bc 2>/dev/null || echo 0)"
-TESTS_FAILED="$(grep -rh '<testsuite ' build/ services/*/build/ 2>/dev/null \
-    | grep -oP 'failures="\K[0-9]+' | paste -sd+ - | bc 2>/dev/null || echo 0)"
-TESTS_TOTAL="${TESTS_TOTAL:-0}"
-TESTS_FAILED="${TESTS_FAILED:-0}"
 
 # --- Render -------------------------------------------------------------------
 mkdir -p "$(dirname "$OUTPUT_FILE")"
@@ -118,15 +103,6 @@ cat > "$OUTPUT_FILE" <<EOF
 ## Changes
 
 ${CHANGES}
-
----
-
-## Test Summary
-
-- Total tests executed: ${TESTS_TOTAL}
-- Failures: ${TESTS_FAILED}
-- Integration tests: PASS
-- Performance tests: See report
 
 ---
 

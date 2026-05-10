@@ -15,7 +15,6 @@ pipeline {
     environment {
         REGISTRY      = 'circleguard'
         K8S_NAMESPACE = 'circleguard-stage'
-        NODE_HOST     = 'host.docker.internal'
     }
 
     stages {
@@ -75,7 +74,7 @@ pipeline {
             }
         }
 
-        stage('Build & Push Docker Images') {
+        stage('Build Docker Images') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
                 script {
@@ -182,7 +181,6 @@ pipeline {
 
     post {
         always {
-            sh 'docker logout || true'
             cleanWs()
         }
         success {

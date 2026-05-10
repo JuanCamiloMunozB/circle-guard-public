@@ -15,8 +15,6 @@ pipeline {
     environment {
         REGISTRY        = 'circleguard'
         K8S_NAMESPACE   = 'circleguard-dev'
-        SERVICES        = 'auth-service identity-service form-service promotion-service notification-service dashboard-service'
-        SERVICE_MAP     = 'auth-service:8180 identity-service:8083 form-service:8086 promotion-service:8088 notification-service:8082 dashboard-service:8084'
     }
 
     stages {
@@ -157,7 +155,6 @@ pipeline {
 
     post {
         always {
-            sh 'docker logout || true'
             cleanWs()
         }
         success {

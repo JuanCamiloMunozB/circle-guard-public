@@ -33,9 +33,9 @@ Se creó un Dockerfile para cada uno de los seis servicios seleccionados, ubicad
 
 Para el despliegue en Kubernetes se estructuró el directorio `k8s/` con una separación clara entre la infraestructura compartida y los manifiestos de los servicios de aplicación. El archivo `namespaces.yaml` define tres namespaces independientes: `circleguard-dev`, `circleguard-stage` y `circleguard-master`, que corresponden a los tres ambientes del ciclo de entrega.
 
-Dentro del subdirectorio `infrastructure/` se encuentran cuatro manifiestos que despliegan los componentes de infraestructura: PostgreSQL con un `PersistentVolumeClaim` de 5 GiB y un `ConfigMap` que ejecuta el script `init-db.sql` al inicializar el contenedor; Kafka junto con su Zookeeper como par inseparable; Redis en modo de instancia única; y Neo4j con su propio `PersistentVolumeClaim`.
+Dentro del subdirectorio `infrastructure/` se encuentran cinco manifiestos que despliegan los componentes de infraestructura: PostgreSQL con un `PersistentVolumeClaim` de 5 GiB y un `ConfigMap` que ejecuta el script `init-db.sql` al inicializar el contenedor; Kafka junto con su Zookeeper como par inseparable; Redis en modo de instancia única; Neo4j con su propio `PersistentVolumeClaim`; y OpenLDAP como directorio de identidades.
 
-Los manifiestos de los seis servicios de aplicación están separados en dos directorios según el tipo de recurso de Kubernetes. El directorio `k8s/deployments/` contiene un archivo por microservicio con el recurso `Deployment`: una réplica inicial con sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`). Las variables de entorno (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios) provienen del `ConfigMap` compartido `circleguard-config` y del `Secret` `circleguard-secrets`, referenciados mediante `envFrom:` y `env:`. El directorio `k8s/services/` contiene un recurso `Service` de tipo `NodePort` por microservicio, organizado en tres subdirectorios (`dev/`, `stage/`, `master/`), cada uno con un rango de puertos distinto para evitar conflictos de asignación de NodePort a nivel de clúster: los NodePorts son un recurso global del clúster y no están acotados al namespace.
+Los manifiestos de los seis servicios de aplicación están separados en dos directorios según el tipo de recurso de Kubernetes. El directorio `k8s/deployments/` contiene un archivo por microservicio con el recurso `Deployment`: una réplica inicial con sondas de disponibilidad (`readinessProbe`) y de vida (`livenessProbe`) apuntando al endpoint estándar de Spring Actuator (`/actuator/health`). Las variables de entorno (cadenas de conexión a bases de datos, URL del broker Kafka, credenciales y URLs de otros servicios) provienen del `ConfigMap` compartido `circleguard-config` y del `Secret` `circleguard-secrets`, referenciados mediante `envFrom:` y `env:`. El directorio `k8s/services/` contiene un recurso `Service` de tipo `ClusterIP` por microservicio, sin subdirectorios por ambiente: el mismo manifiesto se aplica en los tres namespaces. Se optó por `ClusterIP` en lugar de `NodePort` porque los NodePorts son un recurso global del clúster (no están acotados al namespace) y compartir los mismos números entre `circleguard-dev`, `circleguard-stage` y `circleguard-master` produce conflictos de asignación. El acceso externo durante las pruebas E2E y de rendimiento se resuelve con `kubectl port-forward` desde el agente Jenkins, que tunelea cada `Service` ClusterIP al `localhost` del contenedor por la duración del stage.
 
 La dependencia de los servicios respecto de la infraestructura (PostgreSQL, Neo4j, Kafka, Redis) se gestiona exclusivamente mediante las `readinessProbe`: mientras una dependencia no esté disponible, el pod no pasa al estado `Ready` y Kubernetes no le envía tráfico. Se optó por este enfoque en lugar de `initContainers` porque los `initContainers` requieren que las imágenes de utilidades (p. ej. `busybox`) estén en caché o disponibles en Docker Hub en el momento del despliegue; en entornos locales con Docker Desktop eso genera fallos `ErrImagePull` si Docker Hub aplica rate limiting. La `readinessProbe` funciona con la imagen de la aplicación, que ya está disponible localmente.
 
@@ -47,9 +47,9 @@ El archivo `jenkins/config/jenkins-account.yaml` define el control de acceso bas
 
 ### 2.3 Configuración de Jenkins
 
-Jenkins actúa como el orquestador central de los pipelines. El `Dockerfile.jenkins` personaliza la imagen oficial `jenkins/jenkins:lts-jdk21` con la instalación de las herramientas necesarias: Docker CLI (para construir imágenes dentro del agente), `kubectl` con versión pinada vía argumento de build (descargado como binario estático), Python 3 con `pip3` (para instalar y ejecutar Locust en los stages de rendimiento) y una identidad Git global (`jenkins@circleguard.ci` / `Jenkins CI`) requerida para la creación de tags Git anotados en el pipeline master. Los plugins esenciales (`workflow-aggregator`, `git`, `kubernetes-cli`, `junit`, `htmlpublisher`, `configuration-as-code`, `job-dsl`, entre otros) se pre-instalan durante el build de la imagen mediante `jenkins-plugin-cli` leyendo el archivo `plugins.txt`, eliminando el paso manual del wizard inicial.
+Jenkins actúa como el orquestador central de los pipelines. El `Dockerfile.jenkins` personaliza la imagen oficial `jenkins/jenkins:lts-jdk21` con la instalación de las herramientas necesarias: Docker CLI (para construir imágenes dentro del agente), `kubectl` con versión pinada vía argumento de build (descargado como binario estático) y Python 3 con `pip3` (para instalar y ejecutar Locust en los stages de rendimiento). Los plugins esenciales (`workflow-aggregator`, `git`, `kubernetes-cli`, `junit`, `htmlpublisher`, `configuration-as-code`, `job-dsl`, entre otros) se pre-instalan durante el build de la imagen mediante `jenkins-plugin-cli` leyendo el archivo `plugins.txt`, eliminando el paso manual del wizard inicial.
 
-La configuración del controlador de Jenkins se gestiona declarativamente mediante el plugin **Configuration as Code (JCasC)**: el archivo `jenkins/config/casc.yaml` define el usuario administrador, las credenciales (Docker Hub y token de GitHub) y los tres jobs de pipeline apuntando al repositorio Git con sus respectivos `Jenkinsfile.dev`, `Jenkinsfile.stage` y `Jenkinsfile.master`. Las variables sensibles (usuario, contraseñas, tokens, URL del repo) provienen de un archivo `.env` local que el `docker-compose.jenkins.yml` carga vía `env_file:` y JCasC resuelve mediante sustitución `${VAR}` al arrancar el contenedor. Este enfoque permite re-crear todo el entorno Jenkins desde cero sin clics manuales: levantar el contenedor implica que el admin, las credenciales y los tres jobs ya están configurados.
+La configuración del controlador de Jenkins se gestiona declarativamente mediante el plugin **Configuration as Code (JCasC)**: el archivo `jenkins/config/casc.yaml` define el usuario administrador, la credencial `k8s-sa-token` (token Bearer del `ServiceAccount` de Kubernetes) y los tres jobs de pipeline apuntando al repositorio Git con sus respectivos `Jenkinsfile.dev`, `Jenkinsfile.stage` y `Jenkinsfile.master`. Las variables sensibles (usuario, contraseña del admin, token del SA, URL del repo) provienen de un archivo `.env` local que el `docker-compose.jenkins.yml` carga vía `env_file:` y JCasC resuelve mediante sustitución `${VAR}` al arrancar el contenedor. Este enfoque permite re-crear todo el entorno Jenkins desde cero sin clics manuales: levantar el contenedor implica que el admin, la credencial de Kubernetes y los tres jobs ya están configurados.
 
 La comunicación con el clúster Kubernetes se realiza mediante el token del `ServiceAccount` `jenkins`, definido en `jenkins/config/jenkins-account.yaml`. El script `jenkins/scripts/setup-k8s-jenkins.sh` aplica el manifiesto RBAC, espera a que el `Secret` `jenkins-token` sea populado por Kubernetes, extrae el token Bearer y la URL del API server (reescrita de `127.0.0.1` a `host.docker.internal`), y los escribe como `K8S_SA_TOKEN` y `K8S_API_SERVER` en el archivo `.env`. JCasC lee esas variables al arrancar el contenedor y crea automáticamente la credencial `k8s-sa-token` en el Credential Store de Jenkins. En los pipelines, cada stage que ejecuta comandos `kubectl` envuelve sus pasos en `withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER)`, que genera un kubeconfig temporal con autenticación por token Bearer y lo elimina al salir del bloque. El plugin omite la verificación TLS de forma automática cuando no se proporciona un certificado de CA, lo que es adecuado para el clúster local de Docker Desktop. Este enfoque es más cercano al control de acceso de producción: los pipelines se autentican con permisos acotados por RBAC en cada namespace en lugar de usar las credenciales de administrador del clúster.
 
@@ -83,9 +83,9 @@ El pipeline de stage amplía el de desarrollo con capas adicionales de validaci�
 
 El pipeline master constituye la puerta final antes del despliegue en producción. Ejecuta la secuencia completa de validación: pruebas unitarias, pruebas de integración, construcción de artefactos, construcción y etiquetado de imágenes Docker con el esquema de versionamiento `v<BUILD_NUMBER>`, despliegue al namespace `circleguard-master` y verificación del rollout. La variable `IMAGE_TAG` se inicializa en el bloque `environment` como `v<BUILD_NUMBER>` y se sobrescribe a `latest` en el Checkout cuando `SKIP_DOCKER_BUILD` es `true`. A continuación ejecuta una suite de pruebas de validación del sistema y una prueba de rendimiento con cincuenta usuarios concurrentes durante ciento veinte segundos, cuyos resultados se exportan en formato HTML y CSV.
 
-La característica más relevante de este pipeline desde la perspectiva de Change Management es la generación automática de release notes, que se describe en la sección 5. El pipeline finaliza con la creación de un tag Git anotado con el número de versión; la identidad del committer está configurada globalmente en el contenedor Jenkins como `Jenkins CI <jenkins@circleguard.ci>`, lo que evita el error `Committer identity unknown` en entornos sin configuración de usuario Git local.
+La característica más relevante de este pipeline desde la perspectiva de Change Management es la generación automática de release notes, que se describe en la sección 5. El documento generado consolida cambios, autores y resultados de pruebas en un artefacto archivado por Jenkins, identificado con la versión `v<BUILD_NUMBER>` que también nombra las imágenes Docker desplegadas en el namespace de producción.
 
-[Image: Etapas del pipeline master en Jenkins mostrando todas las fases completadas, incluyendo Generate Release Notes y Tag Release]
+[Image: Etapas del pipeline master en Jenkins mostrando todas las fases completadas, incluyendo Generate Release Notes]
 
 [Image: Artefactos del build master en Jenkins: locust-report-master.html, locust-master*.csv y release-notes-v<N>.md]
 
@@ -944,17 +944,15 @@ En caso de que algún pod no alcance el estado `Running` dentro del timeout, el 
 
 ### 5.2 Generación automática de Release Notes
 
-La generación de release notes forma parte del pipeline master y sigue las buenas prácticas de Change Management definidas en el marco ITIL para la gestión de cambios en sistemas en producción. El proceso de generación opera en cuatro pasos. Primero, recupera el tag Git más reciente anterior al commit actual mediante `git describe --tags`; si no existe ningún tag previo, toma los últimos veinte commits del repositorio. Segundo, obtiene la lista de commits entre ese tag y `HEAD`, incluyendo el mensaje y el autor de cada uno. Tercero, extrae del directorio `build/` los resultados de los tests en formato XML para calcular el total de pruebas ejecutadas y el número de fallos. Cuarto, consolida toda esta información en un documento Markdown estructurado que incluye fecha de lanzamiento, número de build, hash corto del commit, nombre del autor, tabla de servicios desplegados con sus versiones de imagen, lista de cambios incluidos, resumen de resultados de pruebas y referencia al namespace Kubernetes de destino.
+La generación de release notes forma parte del pipeline master y sigue las buenas prácticas de Change Management definidas en el marco ITIL para la gestión de cambios en sistemas en producción. El proceso de generación opera en tres pasos. Primero, recupera el tag Git más reciente anterior al commit actual mediante `git describe --tags`; si no existe ningún tag previo, toma los últimos veinte commits del repositorio. Segundo, obtiene la lista de commits dentro de ese rango, incluyendo el mensaje y el autor de cada uno, y los clasifica por prefijo de Conventional Commits en tres secciones (`feat` → Features, `fix` → Bug Fixes, todo lo demás → Other Changes). Tercero, consolida toda esta información en un documento Markdown estructurado que incluye fecha de lanzamiento, número de build, hash corto del commit, nombre del autor, tabla de servicios desplegados con sus versiones de imagen, lista de cambios agrupada y referencia al namespace Kubernetes de destino.
 
-Este documento se archiva como artefacto del build en Jenkins, se escribe en el directorio `docs/` del repositorio y queda accesible como parte del historial del proyecto. Al finalizar el pipeline se crea también un tag Git anotado con el número de versión, estableciendo un marcador permanente en el historial del repositorio. La identidad del committer configurada en el contenedor Jenkins (`Jenkins CI <jenkins@circleguard.ci>`) garantiza que los tags reflejen acciones automatizadas, distinguiéndolas de commits realizados por los desarrolladores del equipo.
+Este documento se archiva como artefacto del build en Jenkins y se escribe en el directorio `docs/` del repositorio, donde queda accesible como parte del historial del proyecto.
 
-El esquema de versionamiento adopta el número de build de Jenkins como identificador principal (`v<BUILD_NUMBER>`), lo que garantiza que cada versión en producción tenga un identificador único y ordenado cronológicamente, facilita la correlación entre un artefacto desplegado y el build de CI que lo generó, y permite rastrear exactamente qué commits están incluidos en cada versión mediante el rango `v<N-1>..v<N>` en el historial de Git.
+El esquema de versionamiento adopta el número de build de Jenkins como identificador principal (`v<BUILD_NUMBER>`), lo que garantiza que cada versión en producción tenga un identificador único y ordenado cronológicamente, y facilita la correlación entre un artefacto desplegado, el build de CI que lo generó y el documento de release notes correspondiente.
 
 [Image: Archivo release-notes-vN.md generado automáticamente por el pipeline master, mostrando la tabla de servicios, lista de commits y resumen de tests]
 
 [Image: Pantalla de Jenkins mostrando el artefacto release-notes archivado junto con los reportes de Locust en los artefactos del build]
-
-[Image: Vista de tags en GitHub mostrando los tags v<N> creados por el pipeline master con sus mensajes de anotación]
 
 ---
 
@@ -1003,7 +1001,7 @@ cd circle-guard-public
 cp .env.example .env
 ```
 
-A continuación se debe editar el archivo `.env` con los valores reales. Las variables mínimas a configurar son `JENKINS_ADMIN_USERNAME` y `JENKINS_ADMIN_PASSWORD` (credenciales que JCasC creará automáticamente en Jenkins) y `GIT_REPO_URL` (URL del fork del repositorio). Las credenciales `GIT_TOKEN`, `DOCKERHUB_USERNAME` y `DOCKERHUB_PASSWORD` pueden quedarse vacías porque los pipelines actuales no las requieren.
+A continuación se debe editar el archivo `.env` con los valores reales. Las variables a configurar son `JENKINS_ADMIN_USERNAME` y `JENKINS_ADMIN_PASSWORD` (credenciales que JCasC creará automáticamente en Jenkins) y `GIT_REPO_URL` (URL del fork del repositorio). Las variables `K8S_SA_TOKEN` y `K8S_API_SERVER` se completan automáticamente en el Paso 3 y no deben editarse manualmente.
 
 ### 7.3 Levantar la infraestructura local
 
@@ -1044,17 +1042,29 @@ Con la infraestructura levantada (o sin ella, en el caso de las pruebas de integ
     --continue
 ```
 
-Para las pruebas E2E y de rendimiento se necesita primero el despliegue Kubernetes (sección 7.5). Una vez el clúster esté corriendo:
+Para las pruebas E2E y de rendimiento se necesita primero el despliegue Kubernetes (sección 7.5). Como los `Service` son de tipo `ClusterIP`, primero hay que abrir un `kubectl port-forward` por servicio en una terminal aparte:
 
 ```bash
-# E2E contra los puertos NodePort de Kubernetes
-BASE_URL=http://host.docker.internal \
-AUTH_PORT=30180 IDENTITY_PORT=30083 FORM_PORT=30086 \
-PROMOTION_PORT=30088 NOTIFICATION_PORT=30082 DASHBOARD_PORT=30084 \
+NS=circleguard-stage   # o circleguard-dev / circleguard-master
+kubectl port-forward -n $NS svc/auth-service         8180:8180 &
+kubectl port-forward -n $NS svc/identity-service     8083:8083 &
+kubectl port-forward -n $NS svc/form-service         8086:8086 &
+kubectl port-forward -n $NS svc/promotion-service    8088:8088 &
+kubectl port-forward -n $NS svc/notification-service 8082:8082 &
+kubectl port-forward -n $NS svc/dashboard-service    8084:8084 &
+```
+
+Una vez los túneles están activos:
+
+```bash
+# E2E contra los servicios tuneleados a localhost
+BASE_URL=http://localhost \
+AUTH_PORT=8180 IDENTITY_PORT=8083 FORM_PORT=8086 \
+PROMOTION_PORT=8088 NOTIFICATION_PORT=8082 DASHBOARD_PORT=8084 \
 bash jenkins/scripts/run-e2e.sh
 
 # Locust en modo baseline (10 usuarios, 60 segundos)
-LOCUST_HOST=http://host.docker.internal:30086 \
+LOCUST_HOST=http://localhost:8086 \
 PROFILE=baseline \
 bash jenkins/scripts/run-locust.sh
 ```
@@ -1101,15 +1111,15 @@ Después de un minuto aproximadamente, Jenkins estará disponible en `http://loc
 
 Una vez Jenkins esté corriendo, los tres jobs (`circleguard-dev`, `circleguard-stage`, `circleguard-master`) ya están creados por JCasC y apuntan al repositorio Git configurado en `.env`. Para ejecutar cualquiera de ellos basta con abrirlo en la UI y hacer clic en **Build with Parameters**, dejar los valores por defecto y hacer clic en **Build**.
 
-> **Prerequisito:** antes del primer build de cada namespace, la infraestructura debe estar desplegada con `bash k8s/install-infra.sh <namespace>` (Paso 4 de la sección anterior). Los pipelines solo despliegan los servicios de aplicación (`k8s/deployments/` y `k8s/services/<env>/`) y asumen que PostgreSQL, Neo4j, Kafka, Redis y LDAP ya están corriendo.
+> **Prerequisito:** antes del primer build de cada namespace, la infraestructura debe estar desplegada con `bash k8s/install-infra.sh <namespace>` (Paso 4 de la sección anterior). Los pipelines solo despliegan los servicios de aplicación (`k8s/deployments/` y `k8s/services/`) y asumen que PostgreSQL, Neo4j, Kafka, Redis y LDAP ya están corriendo.
 
 Cada pipeline ejecuta una secuencia distinta:
 
 | Pipeline | Stages clave |
 |---|---|
 | `circleguard-dev` | Checkout → Unit Tests → Integration Tests → Build JARs → Build Docker Images → Deploy → Wait for Rollout → Smoke Tests |
-| `circleguard-stage` | Checkout → Unit Tests → Integration Tests → Build JARs → Build & Push → Deploy → Wait for Rollout → E2E Tests → Performance Baseline |
-| `circleguard-master` | Checkout → Unit Tests → Integration Tests → Build JARs → Build & Push → Deploy → Wait for Rollout → E2E Tests → Performance Tests → Generate Release Notes → Tag Release |
+| `circleguard-stage` | Checkout → Unit Tests → Integration Tests → Build JARs → Build Docker Images → Deploy → Wait for Rollout → E2E Tests → Performance Baseline |
+| `circleguard-master` | Checkout → Unit Tests → Integration Tests → Build JARs → Build Docker Images → Deploy → Wait for Rollout → E2E Tests → Performance Tests → Generate Release Notes |
 
 El parámetro `SKIP_DOCKER_BUILD` permite re-ejecutar un pipeline reutilizando las imágenes Docker ya construidas (etiqueta `*-latest`), útil cuando se itera sobre stages posteriores al build.
 
@@ -1207,21 +1217,23 @@ Los reportes generados quedan en `tests/performance/reports/locust-report-<perfi
 
 **Acceso directo a los servicios desplegados:**
 
-Los servicios exponen los siguientes NodePorts y son accesibles desde la máquina host vía `http://localhost:<nodePort>`:
+Los `Service` de Kubernetes son de tipo `ClusterIP` (no expuestos directamente al host). Para acceder a un servicio desde la máquina local se utiliza `kubectl port-forward`:
 
-| Servicio | Puerto interno | NodePort |
-|---|---|---|
-| auth-service | 8180 | 30180 |
-| identity-service | 8083 | 30083 |
-| form-service | 8086 | 30086 |
-| promotion-service | 8088 | 30088 |
-| notification-service | 8082 | 30082 |
-| dashboard-service | 8084 | 30084 |
-
-Para verificar la salud de un servicio desplegado:
+| Servicio | Puerto |
+|---|---|
+| auth-service | 8180 |
+| identity-service | 8083 |
+| form-service | 8086 |
+| promotion-service | 8088 |
+| notification-service | 8082 |
+| dashboard-service | 8084 |
 
 ```bash
-curl http://localhost:30086/actuator/health
+# Tunelear un servicio individual al localhost
+kubectl port-forward -n circleguard-dev svc/form-service 8086:8086
+
+# Verificar la salud del servicio en otra terminal
+curl http://localhost:8086/actuator/health
 ```
 
 **Verificar que la configuración JCasC se aplicó:**

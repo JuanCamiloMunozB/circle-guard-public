@@ -24,17 +24,6 @@ credentials:
   system:
     domainCredentials:
       - credentials:
-          - usernamePassword:
-              scope: GLOBAL
-              id: "dockerhub"
-              description: "Docker Hub credentials (push images)"
-              username: "${DOCKERHUB_USERNAME}"
-              password: "${DOCKERHUB_PASSWORD}"
-          - string:
-              scope: GLOBAL
-              id: "github-token"
-              description: "GitHub token (push tags, create releases)"
-              secret: "${GIT_TOKEN}"
           - string:
               scope: GLOBAL
               id: "k8s-sa-token"

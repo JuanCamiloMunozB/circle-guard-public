@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.jenkins
     container_name: jenkins
-    # Loads JENKINS_ADMIN_*, GIT_*, DOCKERHUB_* from the project-level .env file
+    # Loads JENKINS_ADMIN_*, GIT_* and K8S_* from the project-level .env file
     # (gitignored). JCasC reads them via ${VAR} substitution at startup.
     env_file:
       - ../../.env
