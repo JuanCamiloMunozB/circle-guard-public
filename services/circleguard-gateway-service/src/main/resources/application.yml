@@ -1,18 +1,21 @@
+# Spring relaxed binding resolves env vars (SPRING_DATA_REDIS_HOST,
+# SPRING_DATA_REDIS_PORT) onto the corresponding properties.
 spring:
   application:
     name: circleguard-gateway-service
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
+      host: localhost
+      port: 6379
 
+# Non-spring custom keys with explicit placeholders matching k8s/configmap.yaml + circleguard-secrets.
 jwt:
-  secret: ${JWT_SECRET:my-super-secret-dev-key-32-chars-long-12345678}
+  secret: ${JWT_SECRET:dev-only-jwt-secret-do-not-use-in-prod-32chars}
   expiration: ${JWT_EXPIRATION:3600000}
 
 qr:
-  secret: ${QR_SECRET:my-qr-secret-key-for-dev-1234567890}
+  secret: ${QR_SECRET:dev-only-qr-secret-do-not-use-in-prod-32chars}
   expiration: ${QR_EXPIRATION:300}
 
 server:
-  port: ${SERVER_PORT:8087}
+  port: 8087

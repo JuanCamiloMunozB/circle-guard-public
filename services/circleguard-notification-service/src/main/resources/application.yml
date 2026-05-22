@@ -1,16 +1,18 @@
+# Spring relaxed binding resolves env vars (SPRING_KAFKA_BOOTSTRAP_SERVERS,
+# SPRING_MAIL_HOST, SPRING_MAIL_PORT) onto the corresponding properties.
 spring:
   application:
     name: circleguard-notification-service
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: localhost:9092
     consumer:
-      group-id: ${KAFKA_CONSUMER_GROUP:notification-group}
+      group-id: notification-group
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
   mail:
-    host: ${MAIL_HOST:localhost}
-    port: ${MAIL_PORT:25}
+    host: localhost
+    port: 25
     properties:
       mail:
         smtp:
@@ -18,17 +20,18 @@ spring:
           starttls:
             enable: false
 
+# Non-spring custom keys with explicit placeholders matching k8s/configmap.yaml + circleguard-secrets.
 auth:
   api:
     url: ${AUTH_API_URL:http://localhost:8180}
 
 jwt:
-  secret: ${JWT_SECRET:my-super-secret-dev-key-32-chars-long-12345678}
+  secret: ${JWT_SECRET:dev-only-jwt-secret-do-not-use-in-prod-32chars}
   expiration: ${JWT_EXPIRATION:3600000}
 
 qr:
-  secret: ${QR_SECRET:my-qr-secret-key-for-dev-1234567890}
+  secret: ${QR_SECRET:dev-only-qr-secret-do-not-use-in-prod-32chars}
   expiration: ${QR_EXPIRATION:300}
 
 server:
-  port: ${SERVER_PORT:8082}
+  port: 8082

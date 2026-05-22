@@ -1,13 +1,16 @@
+# No external dependencies wired in yet; future S3/MinIO config will follow the
+# same pattern (Spring relaxed binding for spring.* keys, explicit ${} for the rest).
 spring:
   application:
     name: circleguard-file-service
 
-# Placeholder for S3/MinIO configuration if needed later (will be externalized when wired up)
-# aws:
-#   s3:
-#     endpoint: ${S3_ENDPOINT:http://localhost:9000}
-#     access-key: ${S3_ACCESS_KEY:minioadmin}
-#     secret-key: ${S3_SECRET_KEY:minioadmin}
+# Placeholder for S3/MinIO configuration if needed later. When uncommented,
+# spring.* keys rely on relaxed binding; AWS_*/S3_* keys would need explicit ${} placeholders.
+# spring:
+#   cloud:
+#     aws:
+#       s3:
+#         endpoint: http://localhost:9000
 
 server:
-  port: ${SERVER_PORT:8085}
+  port: 8085
