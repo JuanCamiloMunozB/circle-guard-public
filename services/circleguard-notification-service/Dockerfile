@@ -9,7 +9,10 @@ COPY services/circleguard-notification-service/ services/circleguard-notificatio
 RUN chmod +x gradlew && ./gradlew :services:circleguard-notification-service:bootJar --no-daemon
 
 FROM eclipse-temurin:21-jre-alpine
+RUN addgroup -S spring && adduser -S spring -G spring
 WORKDIR /app
 COPY --from=build /workspace/services/circleguard-notification-service/build/libs/*.jar app.jar
+RUN chown spring:spring /app/app.jar
+USER spring
 EXPOSE 8082
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
