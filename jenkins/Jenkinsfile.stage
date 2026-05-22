@@ -36,6 +36,8 @@ pipeline {
                               :services:circleguard-promotion-service:test \
                               :services:circleguard-notification-service:test \
                               :services:circleguard-dashboard-service:test \
+                              :services:circleguard-gateway-service:test \
+                              :services:circleguard-file-service:test \
                     --continue'
             }
             post {
@@ -70,6 +72,8 @@ pipeline {
                               :services:circleguard-promotion-service:bootJar \
                               :services:circleguard-notification-service:bootJar \
                               :services:circleguard-dashboard-service:bootJar \
+                              :services:circleguard-gateway-service:bootJar \
+                              :services:circleguard-file-service:bootJar \
                     --parallel'
             }
         }
@@ -85,6 +89,8 @@ pipeline {
                         [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
                         [name: 'notification-service', dir: 'circleguard-notification-service'],
                         [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
+                        [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
+                        [name: 'file-service',         dir: 'circleguard-file-service'],
                     ]
                     services.each { svc ->
                         sh "docker build -f services/${svc.dir}/Dockerfile -t ${REGISTRY}/${svc.name}:stage-${BUILD_NUMBER} ."
