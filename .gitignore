@@ -59,3 +59,7 @@ tests/performance/locust-*.csv
 
 # Generated kubeconfig for the Jenkins container (created by setup-kubeconfig.ps1)
 jenkins/config/.kubeconfig-incontainer
+
+CLAUDE.md
+PLAN_IMPLEMENTACION_V2.md
+GUIA_DECISIONES_ARQUITECTONICAS.md
