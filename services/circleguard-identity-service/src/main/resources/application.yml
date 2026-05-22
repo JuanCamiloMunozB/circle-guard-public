@@ -5,24 +5,24 @@ spring:
     problemdetails:
       enabled: true
   datasource:
-    url: jdbc:postgresql://localhost:5432/circleguard_identity
-    username: admin
-    password: password
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/circleguard_identity}
+    username: ${DB_USER:admin}
+    password: ${DB_PASSWORD:password}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: ${JPA_DDL_AUTO:update}
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
 vault:
-  secret: "746573742d7365637265742d33322d63686172732d6c6f6e672d313233343536"
-  salt: "deadbeef"
-  hash-salt: "12345678"
+  secret: ${VAULT_SECRET:746573742d7365637265742d33322d63686172732d6c6f6e672d313233343536}
+  salt: ${VAULT_SALT:deadbeef}
+  hash-salt: ${VAULT_HASH_SALT:12345678}
 
 jwt:
-  secret: "my-super-secret-dev-key-32-chars-long-12345678"
+  secret: ${JWT_SECRET:my-super-secret-dev-key-32-chars-long-12345678}
 
 server:
-  port: 8083
+  port: ${SERVER_PORT:8083}

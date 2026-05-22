@@ -2,12 +2,12 @@ spring:
   application:
     name: circleguard-file-service
 
-# Placeholder for S3/MinIO configuration if needed later
+# Placeholder for S3/MinIO configuration if needed later (will be externalized when wired up)
 # aws:
 #   s3:
-#     endpoint: http://localhost:9000
-#     access-key: minioadmin
-#     secret-key: minioadmin
+#     endpoint: ${S3_ENDPOINT:http://localhost:9000}
+#     access-key: ${S3_ACCESS_KEY:minioadmin}
+#     secret-key: ${S3_SECRET_KEY:minioadmin}
 
 server:
-  port: 8085
+  port: ${SERVER_PORT:8085}
