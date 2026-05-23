@@ -32,8 +32,18 @@ public class LoginController {
             );
             System.out.println("Authentication successful for: " + username);
 
-            // 2. Anonymize (Fetch/Create Anonymous ID from Identity Service)
-            UUID anonymousId = identityClient.getAnonymousId(username);
+            // 2. Anonymize (Fetch/Create Anonymous ID from Identity Service).
+            //    The IdentityClient is wrapped in a Circuit Breaker: empty means
+            //    identity-service is unreachable or the breaker is OPEN. We MUST
+            //    NOT issue a JWT in that case — degrade to HTTP 503.
+            Optional<UUID> maybeAnonymousId = identityClient.getAnonymousId(username);
+            if (maybeAnonymousId.isEmpty()) {
+                System.err.println("Identity service degraded — denying login for " + username);
+                return ResponseEntity.status(503).body(Map.of(
+                        "message", "Identity service temporarily unavailable, please retry"
+                ));
+            }
+            UUID anonymousId = maybeAnonymousId.get();
             System.out.println("Anonymous ID retrieved: " + anonymousId);
 
             // 3. Issue Token

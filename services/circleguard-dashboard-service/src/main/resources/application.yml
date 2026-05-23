@@ -15,5 +15,25 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
+# Resilience4j Circuit Breaker — wraps calls to promotion-service from PromotionClient.
+# Every threshold is parameterized so Ops can tune per environment without rebuilds.
+resilience4j:
+  circuitbreaker:
+    instances:
+      promotionService:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: ${CB_PROMOTION_WINDOW_SIZE:10}
+        minimumNumberOfCalls: ${CB_PROMOTION_MIN_CALLS:5}
+        failureRateThreshold: ${CB_PROMOTION_FAILURE_RATE:50}
+        slowCallRateThreshold: ${CB_PROMOTION_SLOW_RATE:50}
+        slowCallDurationThreshold: ${CB_PROMOTION_SLOW_DURATION:2s}
+        permittedNumberOfCallsInHalfOpenState: ${CB_PROMOTION_HALF_OPEN_CALLS:3}
+        waitDurationInOpenState: ${CB_PROMOTION_WAIT_OPEN:10s}
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        recordExceptions:
+          - org.springframework.web.client.RestClientException
+          - java.io.IOException
+
 server:
   port: 8084

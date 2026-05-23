@@ -33,5 +33,26 @@ qr:
   secret: ${QR_SECRET:dev-only-qr-secret-do-not-use-in-prod-32chars}
   expiration: ${QR_EXPIRATION:300}
 
+# Resilience4j Circuit Breaker — wraps calls to identity-service from IdentityClient.
+# Every threshold is parameterized so Ops can tune per environment without rebuilds.
+resilience4j:
+  circuitbreaker:
+    instances:
+      identityService:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: ${CB_IDENTITY_WINDOW_SIZE:10}
+        minimumNumberOfCalls: ${CB_IDENTITY_MIN_CALLS:5}
+        failureRateThreshold: ${CB_IDENTITY_FAILURE_RATE:50}
+        slowCallRateThreshold: ${CB_IDENTITY_SLOW_RATE:50}
+        slowCallDurationThreshold: ${CB_IDENTITY_SLOW_DURATION:2s}
+        permittedNumberOfCallsInHalfOpenState: ${CB_IDENTITY_HALF_OPEN_CALLS:3}
+        waitDurationInOpenState: ${CB_IDENTITY_WAIT_OPEN:10s}
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        recordExceptions:
+          - org.springframework.web.client.RestClientException
+          - java.io.IOException
+          - java.lang.IllegalStateException
+
 server:
   port: 8180
