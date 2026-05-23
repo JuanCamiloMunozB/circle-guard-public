@@ -16,6 +16,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -43,7 +44,6 @@ public class LoginControllerTest {
     @Test
     void shouldLoginSuccessfullyAndReturnAnonymizedToken() throws Exception {
         String username = "testuser";
-        String password = "password123";
         UUID anonymousId = UUID.randomUUID();
         String token = "mock-jwt-token";
 
@@ -51,7 +51,7 @@ public class LoginControllerTest {
         Mockito.when(authManager.authenticate(Mockito.any(UsernamePasswordAuthenticationToken.class)))
                 .thenReturn(auth);
 
-        Mockito.when(identityClient.getAnonymousId(username)).thenReturn(anonymousId);
+        Mockito.when(identityClient.getAnonymousId(username)).thenReturn(Optional.of(anonymousId));
 
         Mockito.when(jwtService.generateToken(Mockito.eq(anonymousId), Mockito.any(Authentication.class)))
                 .thenReturn(token);
@@ -63,5 +63,30 @@ public class LoginControllerTest {
                 .andExpect(jsonPath("$.token").value(token))
                 .andExpect(jsonPath("$.anonymousId").value(anonymousId.toString()))
                 .andExpect(jsonPath("$.type").value("Bearer"));
+    }
+
+    /**
+     * Verifies the degraded path: when IdentityClient's Circuit Breaker has
+     * fallen back to Optional.empty() (identity-service down or breaker OPEN),
+     * the login endpoint MUST refuse to mint a JWT and respond 503.
+     */
+    @Test
+    void shouldReturn503WhenIdentityServiceIsDegraded() throws Exception {
+        String username = "testuser";
+
+        Authentication auth = Mockito.mock(Authentication.class);
+        Mockito.when(authManager.authenticate(Mockito.any(UsernamePasswordAuthenticationToken.class)))
+                .thenReturn(auth);
+
+        Mockito.when(identityClient.getAnonymousId(username)).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\": \"testuser\", \"password\": \"password123\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").exists());
+
+        Mockito.verify(jwtService, Mockito.never())
+                .generateToken(Mockito.any(UUID.class), Mockito.any(Authentication.class));
     }
 }
