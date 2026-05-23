@@ -1,10 +1,15 @@
+# Spring relaxed binding resolves env vars like SPRING_DATASOURCE_URL onto
+# spring.datasource.url automatically — no ${} placeholders needed below.
+# Values in this file are LOCAL-DEV DEFAULTS, intentionally non-productive.
+# In Kubernetes they are overridden by k8s/configmap.yaml + circleguard-secrets,
+# plus SPRING_DATASOURCE_URL declared as env on this service's Deployment.
 spring:
   application:
     name: circleguard-auth-service
   datasource:
     url: jdbc:postgresql://localhost:5432/circleguard_auth
     username: admin
-    password: password
+    password: dev-only-not-for-prod
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -16,15 +21,17 @@ spring:
     urls: ldap://localhost:389
     base: dc=circleguard,dc=edu
     username: cn=admin,dc=circleguard,dc=edu
-    password: admin
+    password: dev-only-ldap-not-for-prod
 
+# Non-spring custom keys: relaxed binding does NOT apply, so explicit
+# placeholders are required. Names match k8s/configmap.yaml + circleguard-secrets.
 jwt:
-  secret: "my-super-secret-dev-key-32-chars-long-12345678"
-  expiration: 3600000
+  secret: ${JWT_SECRET:dev-only-jwt-secret-do-not-use-in-prod-32chars}
+  expiration: ${JWT_EXPIRATION:3600000}
 
 qr:
-  secret: "my-qr-secret-key-for-dev-1234567890"
-  expiration: 300
+  secret: ${QR_SECRET:dev-only-qr-secret-do-not-use-in-prod-32chars}
+  expiration: ${QR_EXPIRATION:300}
 
 server:
   port: 8180

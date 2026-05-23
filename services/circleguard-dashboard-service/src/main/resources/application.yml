@@ -1,10 +1,12 @@
+# Spring relaxed binding resolves env vars (e.g. SPRING_DATASOURCE_URL) onto
+# spring.datasource.url automatically — no ${} placeholders needed for spring.*.
 spring:
   application:
     name: circleguard-dashboard-service
   datasource:
     url: jdbc:postgresql://localhost:5432/circleguard_dashboard
     username: admin
-    password: password
+    password: dev-only-not-for-prod
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:

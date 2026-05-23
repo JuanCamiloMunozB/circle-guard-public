@@ -54,3 +54,5 @@ stringData:
   SPRING_LDAP_PASSWORD: admin
   JWT_SECRET: my-super-secret-dev-key-32-chars-long-12345678
   QR_SECRET: my-qr-secret-key-for-dev-1234567890
+  VAULT_SECRET: dev-only-vault-secret-not-for-prod-change-in-production
+  VAULT_SALT: dev-only-salt-change-in-production

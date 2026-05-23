@@ -1,10 +1,13 @@
+# Spring relaxed binding resolves env vars (e.g. SPRING_DATASOURCE_URL,
+# SPRING_KAFKA_BOOTSTRAP_SERVERS) onto the corresponding properties.
+# Local-dev defaults are intentionally non-productive.
 spring:
   application:
     name: circleguard-form-service
   datasource:
     url: jdbc:postgresql://localhost:5432/circleguard_form
     username: admin
-    password: password
+    password: dev-only-not-for-prod
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
