@@ -26,8 +26,11 @@ from locust.exception import StopUser
 
 # Host endpoints come from the environment so the same locustfile drives local
 # runs (docker-compose), stage and master pipelines without code changes.
-LOCUST_HOST = os.getenv("LOCUST_HOST", "http://localhost:8086")
-DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "http://localhost:8084")
+LOCUST_HOST       = os.getenv("LOCUST_HOST",       "http://localhost:8086")
+DASHBOARD_HOST    = os.getenv("DASHBOARD_HOST",    "http://localhost:8084")
+GATEWAY_HOST      = os.getenv("GATEWAY_HOST",      "http://localhost:8080")
+FILE_HOST         = os.getenv("FILE_HOST",         "http://localhost:8087")
+NOTIFICATION_HOST = os.getenv("NOTIFICATION_HOST", "http://localhost:8082")
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +246,114 @@ class DashboardUser(HttpUser):
                 resp.success()
             else:
                 resp.failure(f"Unexpected: {resp.status_code}")
+
+
+class GatewayUser(HttpUser):
+    """
+    Simulates campus-entry QR-code scans hitting gateway-service.
+    High frequency during morning/afternoon entry waves.
+    """
+    wait_time = between(1, 5)
+    host = GATEWAY_HOST
+    weight = 8
+
+    def on_start(self):
+        self.anonymous_id = random_anonymous_id()
+        self.token = None
+
+    @task(10)
+    @tag("gateway", "qr", "read", "critical")
+    def validate_qr_token(self):
+        """Security guard scans a QR code at campus entrance."""
+        payload = {"token": self.token or "dummy-token-for-load-test"}
+        with self.client.post(
+            "/api/v1/qr/validate",
+            json=payload,
+            catch_response=True,
+            name="POST /qr/validate"
+        ) as resp:
+            if resp.status_code in (200, 401, 400):
+                resp.success()
+            elif resp.status_code in (503, 504):
+                resp.failure(f"Service unavailable: {resp.status_code}")
+            else:
+                resp.failure(f"Unexpected: {resp.status_code}")
+
+    @task(2)
+    @tag("gateway", "health")
+    def check_actuator_health(self):
+        """Kubernetes readiness probe equivalent."""
+        with self.client.get(
+            "/actuator/health",
+            catch_response=True,
+            name="GET /actuator/health [gateway]"
+        ) as resp:
+            if resp.status_code == 200:
+                resp.success()
+            else:
+                resp.failure(f"Health probe failed: {resp.status_code}")
+
+
+class FileUser(HttpUser):
+    """
+    Simulates health-center staff uploading medical certificates and
+    downloading files via file-service.
+    """
+    wait_time = between(5, 20)
+    host = FILE_HOST
+    weight = 3
+
+    SAMPLE_PDF = b"%PDF-1.4 1 0 obj<</Type/Catalog>>endobj"
+
+    @task(5)
+    @tag("file", "upload", "write")
+    def upload_certificate(self):
+        """Staff uploads a medical certificate for a student."""
+        with self.client.post(
+            "/api/v1/files/upload",
+            files={"file": ("certificate.pdf", self.SAMPLE_PDF, "application/pdf")},
+            catch_response=True,
+            name="POST /files/upload"
+        ) as resp:
+            if resp.status_code in (200, 201, 202):
+                resp.success()
+            elif resp.status_code in (400, 422):
+                resp.success()  # service is up and rejecting correctly
+            elif resp.status_code in (503, 504):
+                resp.failure(f"Service unavailable: {resp.status_code}")
+            else:
+                resp.failure(f"Unexpected: {resp.status_code}")
+
+    @task(3)
+    @tag("file", "download", "read")
+    def get_file_metadata(self):
+        """Staff retrieves metadata for a previously uploaded file."""
+        fake_id = str(uuid.uuid4())
+        with self.client.get(
+            f"/api/v1/files/{fake_id}",
+            catch_response=True,
+            name="GET /files/{id}"
+        ) as resp:
+            if resp.status_code in (200, 404):
+                resp.success()
+            elif resp.status_code in (503, 504):
+                resp.failure(f"Service unavailable: {resp.status_code}")
+            else:
+                resp.failure(f"Unexpected: {resp.status_code}")
+
+    @task(1)
+    @tag("file", "health")
+    def check_actuator_health(self):
+        """Kubernetes readiness probe equivalent."""
+        with self.client.get(
+            "/actuator/health",
+            catch_response=True,
+            name="GET /actuator/health [file]"
+        ) as resp:
+            if resp.status_code == 200:
+                resp.success()
+            else:
+                resp.failure(f"Health probe failed: {resp.status_code}")
 
 
 # ---------------------------------------------------------------------------
