@@ -79,4 +79,28 @@ class IdentityVaultControllerTest {
         // Verify Kafka event was emitted even on failure
         verify(kafkaTemplate).send(eq("audit.identity.accessed"), any());
     }
+
+    // Covers the generic Exception catch branch (status = "ERROR") in lookupIdentity,
+    // which the NOT_FOUND test above misses because it triggers the ResponseStatusException
+    // branch first. The audit event MUST still be emitted via the finally block,
+    // even though MockMvc rethrows the unhandled RuntimeException as a ServletException.
+    @Test
+    @WithMockUser(authorities = "identity:lookup")
+    void lookupIdentity_unexpectedException_stillEmitsAuditEvent() throws Exception {
+        UUID anonymousId = UUID.randomUUID();
+        when(vaultService.resolveRealIdentity(anonymousId))
+            .thenThrow(new RuntimeException("vault offline"));
+
+        // MockMvc rethrows the controller's RuntimeException through the servlet
+        // stack as a ServletException. We swallow it on purpose — the assertion
+        // we care about is that the audit-trail emission happens in the finally
+        // block of lookupIdentity, BEFORE the exception propagates.
+        try {
+            mockMvc.perform(get("/api/v1/identities/lookup/{id}", anonymousId));
+        } catch (jakarta.servlet.ServletException expected) {
+            // expected — controller rethrows; MockMvc surfaces it
+        }
+
+        verify(kafkaTemplate).send(eq("audit.identity.accessed"), any());
+    }
 }
