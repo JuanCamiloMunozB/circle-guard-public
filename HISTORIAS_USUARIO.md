@@ -147,8 +147,6 @@ desplegable, y consolidar la documentación y la evidencia para la presentación
   - Costos de infraestructura documentados; manual de operaciones básico; guion de video.
 - **Puntos:** 5 · **Prioridad:** Media · **Responsable:** Jose Manuel (Ops) + Juan Camilo (Dev)
 
-**Total Iteración 2: 42 puntos** (incluye HU-12 Seguridad y el alcance ampliado de pruebas).
-
 ### HU-12 — Seguridad: secretos, RBAC de aplicación y TLS
 - **Como** operador, **quiero** secretos fuera de Git, RBAC de privilegio mínimo y TLS,
   **para** cumplir el rubro de Seguridad (5%).
@@ -158,6 +156,8 @@ desplegable, y consolidar la documentación y la evidencia para la presentación
   - TLS configurado en gateway y dashboard vía Ingress; responden por HTTPS.
   - Trivy y SonarQube corren en cada build (escaneo continuo).
 - **Puntos:** 5 · **Prioridad:** Alta · **Responsable:** Jose Manuel (Ops)
+
+**Total Iteración 2: 42 puntos** (incluye HU-12 Seguridad y el alcance ampliado de pruebas).
 
 ---
 
