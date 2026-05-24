@@ -33,5 +33,9 @@ qr:
   secret: ${QR_SECRET:dev-only-qr-secret-do-not-use-in-prod-32chars}
   expiration: ${QR_EXPIRATION:300}
 
+feature:
+  sms-alerts:
+    enabled: ${FEATURE_SMS_ALERTS_ENABLED:false}
+
 server:
   port: 8082

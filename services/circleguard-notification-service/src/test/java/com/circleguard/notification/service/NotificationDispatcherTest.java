@@ -1,5 +1,6 @@
 package com.circleguard.notification.service;
 
+import com.circleguard.notification.config.FeatureToggleProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,6 +30,14 @@ class NotificationDispatcherTest {
 
     @MockBean
     private PushService pushService;
+
+    @Autowired
+    private FeatureToggleProperties featureToggleProperties;
+
+    @org.junit.jupiter.api.BeforeEach
+    void enableSmsAlertsForThisContext() {
+        featureToggleProperties.getSmsAlerts().setEnabled(true);
+    }
 
     @Test
     void shouldDispatchToAllChannelsConcurrently() throws Exception {
