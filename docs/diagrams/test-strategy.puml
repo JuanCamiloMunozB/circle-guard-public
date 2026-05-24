@@ -1,0 +1,92 @@
+@startuml test-strategy
+title Estrategia de pruebas — CircleGuard (HU-09)\nPirámide de tests + tareas Gradle + dependencias por nivel
+
+skinparam rectangle {
+  BackgroundColor<<unit>>        #C8E6C9
+  BackgroundColor<<integration>> #FFE0B2
+  BackgroundColor<<e2e>>         #FFCDD2
+  BackgroundColor<<task>>        #BBDEFB
+  BorderColor                    #424242
+  FontStyle                      bold
+}
+
+' --- Capa Unitaria ---
+rectangle "Unit tests\n(JUnit 5 + Mockito + MockMvc slice)" as Unit <<unit>> {
+  rectangle "auth: 83.2%" as U1
+  rectangle "dashboard: 89.7%" as U2
+  rectangle "file: 88.9%" as U3
+  rectangle "form: 92.0%" as U4
+  rectangle "gateway: 88.9%" as U5
+  rectangle "identity: 83.8%" as U6
+  rectangle "notification: 75.8% (gap doc.)" as U7
+  rectangle "promotion: 81.5%" as U8
+}
+
+' --- Capa Integración ---
+rectangle "Integration tests\n@Tag(\"integration\")\nTestcontainers + EmbeddedKafka + WebMvc" as Int <<integration>> {
+  rectangle "AuthIdentityClient\n(MockServerContainer)" as I1
+  rectangle "SurveyKafkaPublish\n(@EmbeddedKafka)" as I2
+  rectangle "StatusChangeNotification\n(@EmbeddedKafka)" as I3
+  rectangle "DashboardPromotionClient\n(@MockBean)" as I4
+  rectangle "IdentityMapping\n(@WebMvcTest + Security)" as I5
+  rectangle "SurveyListenerToService\n(@EmbeddedKafka)" as I6
+}
+
+' --- Capa E2E ---
+rectangle "E2E tests\n@Tag(\"e2e\")\nREST Assured contra stack desplegado" as E2E <<e2e>> {
+  rectangle "CertificateValidationFlow" as E1
+  rectangle "DashboardStatsFlow" as E2
+  rectangle "HealthSurveyFlow" as E3
+  rectangle "IdentityMappingFlow" as E4
+}
+
+' --- Tasks Gradle ---
+rectangle "gradlew test\n(default, excluye integration + e2e)" as TaskUnit <<task>>
+rectangle "gradlew integrationTest\n(requiere Docker para Testcontainers)" as TaskInt <<task>>
+rectangle ":tests:e2e:e2eTest\n(requiere stack desplegado)" as TaskE2E <<task>>
+rectangle "jacocoTestReport\n(HTML + XML, suma exec de test + integrationTest)" as Jacoco <<task>>
+
+' --- Relaciones ---
+Unit ..> TaskUnit : ejecutado por
+Int  ..> TaskInt  : ejecutado por
+E2E  ..> TaskE2E  : ejecutado por
+
+TaskUnit -> Jacoco : finalizedBy
+TaskInt  -> Jacoco : finalizedBy
+
+' --- Notas explicativas ---
+note right of Unit
+  Sin Docker, sin red, sin stack.
+  Corre en laptop / CI agent local.
+  Cubre lógica pura aislada.
+  Floor JaCoCo: 80% líneas
+  (regla registrada, no atada a check
+   todavía — notification gap doc.)
+end note
+
+note right of Int
+  Requiere Docker en el agent.
+  AuthIdentityClient usa MockServerContainer real,
+  los Kafka heredados usan @EmbeddedKafka in-process.
+  Exclusión: estos NO corren en `gradlew test`.
+end note
+
+note right of E2E
+  CI contra AKS de stage.
+  Requiere: 8 servicios desplegados,
+  Postgres + Kafka + Neo4j + LDAP + Redis,
+  data seeds aplicados.
+  Pendiente de Ops (HU-09b).
+end note
+
+note bottom of Jacoco
+  Excludes:
+   - **/*Application.class
+   - **/dto/**, **/model/**
+   - **/config/**, **/event/**
+   - **/exception/**, **/SecurityConfig.class
+  Reporte HTML: services/<svc>/build/reports/jacoco/test/html/index.html
+  Reporte XML para SonarQube: jacocoTestReport.xml
+end note
+
+@enduml
