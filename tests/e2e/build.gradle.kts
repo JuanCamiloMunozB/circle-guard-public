@@ -26,6 +26,8 @@ tasks.test {
     systemProperty("promotion.port", System.getProperty("promotion.port", "8088"))
     systemProperty("notification.port", System.getProperty("notification.port", "8082"))
     systemProperty("dashboard.port", System.getProperty("dashboard.port", "8084"))
+    systemProperty("gateway.port", System.getProperty("gateway.port", "8080"))
+    systemProperty("file.port", System.getProperty("file.port", "8087"))
 }
 
 tasks.register<Test>("e2eTest") {
@@ -43,4 +45,6 @@ tasks.register<Test>("e2eTest") {
     systemProperty("promotion.port", System.getProperty("promotion.port", "8088"))
     systemProperty("notification.port", System.getProperty("notification.port", "8082"))
     systemProperty("dashboard.port", System.getProperty("dashboard.port", "8084"))
+    systemProperty("gateway.port", System.getProperty("gateway.port", "8080"))
+    systemProperty("file.port", System.getProperty("file.port", "8087"))
 }
