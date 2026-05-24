@@ -1,7 +1,17 @@
 # Estrategia de Pruebas — CircleGuard
 
-> Estado: pasos 9.1, 9.2 y 9.4 de PLAN_IMPLEMENTACION_V2.md ejecutados. Paso 9.3
+> Estado: pasos 9.1, 9.2, 9.4 y 9.6 de PLAN_IMPLEMENTACION_V2.md ejecutados. Paso 9.3
 > (Locust contra AKS) pendiente de coordinación con Ops. Historia de Usuario: HU-09.
+>
+> **Especificaciones detalladas de pruebas por servicio y tipo:**
+> - Unitarias: [`docs/report/tests/unit-tests.md`](../tests/unit-tests.md) (80+ tests PU-xxx)
+> - Integración: [`docs/report/tests/integration-tests.md`](../tests/integration-tests.md) (25+ tests PI-xxx)
+> - E2E: [`docs/report/tests/e2e-tests.md`](../tests/e2e-tests.md) (15 tests PE-001 a PE-015)
+> - Rendimiento: [`docs/report/tests/performance-tests.md`](../tests/performance-tests.md) (3 perfiles PR-001, PR-002, PR-003)
+>
+> Todas las especificaciones están organizadas por los 8 microservicios siguiendo
+> el estándar de 8 campos: Identificador Único, Nombre, Descripción, Prerrequisitos,
+> Entradas, Acciones, Salida Esperada, Criterios de Aceptación.
 
 ## 1. Pirámide de pruebas
 
@@ -194,7 +204,9 @@ Los tests de integración heredados de fases anteriores (`SurveyKafkaPublishInte
 `StatusChangeNotificationIntegrationTest`, `DashboardPromotionClientIntegrationTest`,
 `IdentityMappingIntegrationTest`, `SurveyListenerToServiceIntegrationTest`)
 usan `@EmbeddedKafka` y `@WebMvcTest` con `@MockBean`. Cubrían los enlaces
-Kafka inter-servicio.
+Kafka inter-servicio. Están documentados en
+[`docs/report/tests/integration-tests.md`](../tests/integration-tests.md) bajo
+sus respectivos servicios (form-service, promotion-service, dashboard-service, etc.).
 
 El enlace que **faltaba** era `auth-service → identity-service` por **REST
 síncrono** (con Circuit Breaker después de HU-06). HU-09 lo cierra con:
@@ -202,6 +214,8 @@ síncrono** (con Circuit Breaker después de HU-06). HU-09 lo cierra con:
 ### `AuthIdentityClientIntegrationTest` (Testcontainers real)
 
 Ruta: `services/circleguard-auth-service/src/test/java/com/circleguard/auth/integration/AuthIdentityClientIntegrationTest.java`
+
+Documentado en [`integration-tests.md` sección **auth-service**](../tests/integration-tests.md#auth-service).
 
 Mecánica:
 1. Spinea un contenedor de `mockserver/mockserver:5.15.0` vía
@@ -245,14 +259,14 @@ testImplementation("org.mock-server:mockserver-client-java:5.15.0")
 
 ### Inventario de enlaces inter-servicio cubiertos
 
-| Enlace | Protocolo | Cobertura | Test |
-|---|---|---|---|
-| form → promotion | Kafka `survey.submitted` | embedded Kafka | `SurveyKafkaPublishIntegrationTest` + `SurveyListenerToServiceIntegrationTest` |
-| promotion → notification | Kafka `status.changed` | embedded Kafka | `StatusChangeNotificationIntegrationTest` |
-| dashboard → promotion | REST | `@MockBean PromotionClient` | `DashboardPromotionClientIntegrationTest` |
-| **auth → identity** | **REST** | **MockServerContainer (Testcontainers)** | **`AuthIdentityClientIntegrationTest`** |
-| identity HTTP layer | REST | `@WebMvcTest` + Spring Security | `IdentityMappingIntegrationTest` |
-| promotion → Gotify/Twilio | REST/SDK externo | ⚠️ pendiente sandbox | — |
+| Enlace | Protocolo | Cobertura | Test | Documentado en |
+|---|---|---|---|---|
+| form → promotion | Kafka `survey.submitted` | embedded Kafka | `SurveyKafkaPublishIntegrationTest` + `SurveyListenerToServiceIntegrationTest` | [integration-tests.md#form-service](../tests/integration-tests.md#form-service) |
+| promotion → notification | Kafka `status.changed` | embedded Kafka | `StatusChangeNotificationIntegrationTest` | [integration-tests.md#promotion-service](../tests/integration-tests.md#promotion-service) |
+| dashboard → promotion | REST | `@MockBean PromotionClient` | `DashboardPromotionClientIntegrationTest` | [integration-tests.md#dashboard-service](../tests/integration-tests.md#dashboard-service) |
+| **auth → identity** | **REST** | **MockServerContainer (Testcontainers)** | **`AuthIdentityClientIntegrationTest`** | [integration-tests.md#auth-service](../tests/integration-tests.md#auth-service) |
+| identity HTTP layer | REST | `@WebMvcTest` + Spring Security | `IdentityMappingIntegrationTest` | [integration-tests.md#identity-service](../tests/integration-tests.md#identity-service) |
+| promotion → Gotify/Twilio | REST/SDK externo | ⚠️ pendiente sandbox | — | [integration-tests.md#notification-service](../tests/integration-tests.md#notification-service) |
 
 ## 6. Limitación honesta — notification a 75.8%
 
@@ -299,6 +313,12 @@ no bloquear builds.
 
 ## 8. Cómo correr los tests localmente
 
+Para entender qué tests específicos corre cada comando, ver:
+- **Unitarias:** [`docs/report/tests/unit-tests.md`](../tests/unit-tests.md)
+- **Integración:** [`docs/report/tests/integration-tests.md`](../tests/integration-tests.md)
+- **E2E:** [`docs/report/tests/e2e-tests.md`](../tests/e2e-tests.md)
+- **Rendimiento:** [`docs/report/tests/performance-tests.md`](../tests/performance-tests.md)
+
 ```bash
 # Solo unitarias (rápido, sin Docker, sin red):
 ./gradlew test
@@ -314,6 +334,11 @@ no bloquear builds.
 ./gradlew :tests:e2e:e2eTest \
     -Dbase.url=https://stage.circleguard.edu \
     -Dauth.port=443
+
+# Rendimiento (Locust) — solo contra AKS de stage/prod:
+bash jenkins/scripts/run-locust.sh \
+    --profile baseline|master|stress \
+    --host http://localhost:8080
 
 # Verificar gate de 80% (no atado a check todavía):
 ./gradlew jacocoTestCoverageVerification
