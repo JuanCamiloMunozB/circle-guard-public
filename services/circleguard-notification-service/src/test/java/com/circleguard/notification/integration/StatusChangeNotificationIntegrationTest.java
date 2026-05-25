@@ -2,8 +2,10 @@ package com.circleguard.notification.integration;
 
 import com.circleguard.notification.service.LmsService;
 import com.circleguard.notification.service.NotificationDispatcher;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -35,9 +37,20 @@ import static org.mockito.Mockito.when;
 @SpringBootTest(properties = {
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
-        "spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer"
+        "spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer",
+        // Fast offset commits so consumer position is persisted before mock reset between tests.
+        "spring.kafka.consumer.enable-auto-commit=true",
+        "spring.kafka.consumer.properties.auto.commit.interval.ms=100"
 })
-@EmbeddedKafka(partitions = 1, topics = {"promotion.status.changed"})
+// All topics that have @KafkaListener beans in this service must be listed here.
+// waitForListenerAssignment() iterates over EVERY listener container; if any
+// subscribed topic is missing, Kafka auto-creates it but the partition assignment
+// race causes ContainerTestUtils.waitForAssignment() to time out, failing all tests.
+@EmbeddedKafka(partitions = 1, topics = {
+        "promotion.status.changed",   // ExposureNotificationListener
+        "circle.fenced",              // CircleFencedListener
+        "alert.priority"              // PriorityAlertListener
+})
 @ActiveProfiles("test")
 @Tag("integration")
 class StatusChangeNotificationIntegrationTest {
@@ -71,6 +84,14 @@ class StatusChangeNotificationIntegrationTest {
 
     @MockBean
     private com.circleguard.notification.service.PushService pushService;
+
+    // Spring's MockitoTestExecutionListener resets @MockBean stubs automatically,
+    // but Kafka may deliver a lingering message from the previous test AFTER the
+    // reset fires. Explicit reset here acts as a second safety net.
+    @AfterEach
+    void resetMockInteractions() {
+        Mockito.reset(dispatcher, lmsService);
+    }
 
     private void waitForListenerAssignment() {
         for (MessageListenerContainer container : registry.getListenerContainers()) {

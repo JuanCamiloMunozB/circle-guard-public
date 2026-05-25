@@ -28,10 +28,19 @@ pipeline {
     }
 
     environment {
-        REGISTRY       = 'docker.io/circleguard'
-        K8S_NAMESPACE  = 'circleguard-dev'
-        KANIKO_IMAGE   = 'gcr.io/kaniko-project/executor:debug'
+        REGISTRY        = 'docker.io/circleguard'
+        K8S_NAMESPACE   = 'circleguard-dev'
+        KANIKO_IMAGE    = 'gcr.io/kaniko-project/executor:debug'
         TARGET_PLATFORM = 'linux/arm64'
+        // Testcontainers (PostgreSQL + MockServer containers used in integration tests)
+        // requires the Docker socket. Docker Desktop exposes it at /var/run/docker.sock
+        // inside any WSL2 distro where WSL Integration is enabled:
+        //   Docker Desktop → Settings → Resources → WSL Integration → tick Ubuntu distro.
+        DOCKER_HOST                  = 'unix:///var/run/docker.sock'
+        // Ryuk (Testcontainers resource reaper) can fail in restricted CI environments.
+        // Disabling it avoids privilege errors; leftover containers are removed by the
+        // `docker system prune` step at the end of Build & Push Images.
+        TESTCONTAINERS_RYUK_DISABLED = 'true'
     }
 
     stages {
