@@ -296,6 +296,9 @@ pipeline {
 
 Console: ${env.BUILD_URL}console
 Build: ${env.BUILD_URL}""",
+                // Static fallback ensures at least one recipient even when git author
+                // email is not mapped to a Jenkins user (common in local/dev setups).
+                to: 'juancamuba.swe@gmail.com',
                 recipientProviders: [developers(), culprits()]
             )
         }
