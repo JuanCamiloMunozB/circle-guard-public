@@ -1,0 +1,12 @@
+# Trivy CVE suppression file.
+#
+# Each line is one CVE id. Trivy excludes these from the report, so they will NOT
+# fail the build. Use sparingly and ALWAYS document why a CVE is suppressed.
+#
+# Format:
+#   CVE-YYYY-NNNNN  # Reason for suppression. Expiration: YYYY-MM-DD.
+#
+# Example:
+#   CVE-2024-12345  # False positive in eclipse-temurin alpine layer. Re-evaluate 2026-12-01.
+#
+# Currently empty. Anything CRITICAL/HIGH that Trivy finds is blocking by default.

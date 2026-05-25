@@ -4,6 +4,31 @@ plugins {
     kotlin("jvm") version "1.9.24" apply false
     kotlin("plugin.spring") version "1.9.24" apply false
     kotlin("plugin.jpa") version "1.9.24" apply false
+    // Aggregates JaCoCo XML reports of every subproject and uploads them to SonarQube.
+    // Triggered from Jenkins via `./gradlew sonar` inside `withSonarQubeEnv('sonarqube')`.
+    id("org.sonarqube") version "5.0.0.4638"
+}
+
+sonar {
+    properties {
+        property("sonar.projectKey", "circleguard")
+        property("sonar.projectName", "CircleGuard")
+        property("sonar.sourceEncoding", "UTF-8")
+        // Aggregated coverage report paths (one per service module).
+        property(
+            "sonar.coverage.jacoco.xmlReportPaths",
+            subprojects.joinToString(",") { sp ->
+                "${sp.projectDir}/build/reports/jacoco/test/jacocoTestReport.xml"
+            }
+        )
+        // Same exclusions applied to JaCoCo: keep DTOs, model, config, Application
+        // out of the coverage denominator so the headline number reflects real
+        // business code.
+        property(
+            "sonar.coverage.exclusions",
+            "**/*Application.java,**/dto/**,**/model/**,**/config/**,**/event/**,**/exception/**,**/SecurityConfig.java"
+        )
+    }
 }
 
 allprojects {

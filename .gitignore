@@ -60,6 +60,9 @@ tests/performance/reports/
 tests/performance/locust-report-*.html
 tests/performance/locust-*.csv
 
+# Pipeline security scanner outputs (transient; permanent evidence lives in docs/report/security/)
+tests/security/reports/
+
 # Generated kubeconfig for the Jenkins container (created by setup-kubeconfig.ps1)
 jenkins/config/.kubeconfig-incontainer
 

@@ -80,6 +80,29 @@ pipeline {
             }
         }
 
+        stage('SonarQube Analysis') {
+            steps {
+                // withSonarQubeEnv injects SONAR_HOST_URL + SONAR_AUTH_TOKEN; the
+                // gradle plugin (id 'org.sonarqube' in root build.gradle.kts) picks them
+                // up automatically. Coverage XML produced by JaCoCo in the test stage
+                // is referenced via sonar.coverage.jacoco.xmlReportPaths.
+                withSonarQubeEnv('sonarqube') {
+                    sh './gradlew sonar -Dsonar.qualitygate.wait=true --info'
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            // Blocks the pipeline. If the SonarQube quality gate fails, abortPipeline:true
+            // sends `error` upwards and the build is marked FAILURE - which triggers the
+            // slackSend in the post block below.
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
         stage('Build JARs') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
@@ -135,6 +158,40 @@ pipeline {
                     // Belt-and-suspenders: even though Kaniko leaves no layers, prune any
                     // intermediate buffers from previous unrelated builds.
                     sh 'docker system prune -af --filter "until=1h" || true'
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+            steps {
+                script {
+                    def services = ['auth-service','identity-service','form-service','promotion-service',
+                                    'notification-service','dashboard-service','gateway-service','file-service']
+                    sh 'mkdir -p tests/security/reports'
+                    services.each { svc ->
+                        // --exit-code 1 on CRITICAL/HIGH (gated by .trivyignore for known FPs).
+                        // --ignore-unfixed skips CVEs with no available patch.
+                        sh """
+                            docker run --rm \\
+                                -v //var/run/docker.sock:/var/run/docker.sock \\
+                                -v \$(pwd)/.trivyignore:/.trivyignore:ro \\
+                                -v \$(pwd)/tests/security/reports:/reports \\
+                                aquasec/trivy:latest image \\
+                                    --severity CRITICAL,HIGH \\
+                                    --ignore-unfixed \\
+                                    --exit-code 1 \\
+                                    --no-progress \\
+                                    --format json \\
+                                    --output /reports/trivy-${svc}.json \\
+                                    ${REGISTRY}/${svc}:dev-${BUILD_NUMBER}
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tests/security/reports/trivy-*.json', allowEmptyArchive: true
                 }
             }
         }
@@ -212,13 +269,35 @@ pipeline {
             cleanWs()
         }
         success {
-            echo "DEV pipeline succeeded - Build #${BUILD_NUMBER}"
+            // slackSend silently no-ops if the slack plugin is not installed or the
+            // webhook credential is missing - safe to leave on in environments without
+            // notification wiring.
+            slackSend(
+                color: 'good',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":white_check_mark: *${env.JOB_NAME}* #${env.BUILD_NUMBER} succeeded on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}|view log>"
+            )
         }
         failure {
-            // TODO Phase 8 (sec.8.6): replace this echo with a real slackSend / emailext
-            // notification using a credential stored in Jenkins. Keep the echo as a fallback
-            // for environments without notification plugins.
-            echo "DEV pipeline failed - Build #${BUILD_NUMBER}"
+            // Real Slack notification via Incoming Webhook. Credential `slack-webhook`
+            // is configured in jenkins/config/casc.yaml; the message links to the
+            // failing build log so on-call can jump straight to it.
+            slackSend(
+                color: 'danger',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":x: *${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}console|console log>"
+            )
+            // Email fallback for ops that prefer it. Recipient is the commit author.
+            emailext(
+                subject: "[CircleGuard] ${env.JOB_NAME} #${env.BUILD_NUMBER} FAILED",
+                body: """The pipeline ${env.JOB_NAME} build #${env.BUILD_NUMBER} on branch ${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'} failed.
+
+Console: ${env.BUILD_URL}console
+Build: ${env.BUILD_URL}""",
+                recipientProviders: [developers(), culprits()]
+            )
         }
     }
 }

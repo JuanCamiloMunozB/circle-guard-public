@@ -83,6 +83,27 @@ pipeline {
             }
         }
 
+        stage('SonarQube Analysis') {
+            steps {
+                container('gradle') {
+                    withSonarQubeEnv('sonarqube') {
+                        sh './gradlew sonar -Dsonar.qualitygate.wait=true --info'
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            // Run on the controller (no container() wrapper): waitForQualityGate polls
+            // the Sonar server until it reports a result, abortPipeline:true converts a
+            // failed gate into a pipeline FAILURE so the slackSend in post fires.
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
         stage('Build JARs') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
@@ -130,6 +151,40 @@ pipeline {
                             """
                         }
                     }
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+            steps {
+                container('trivy') {
+                    script {
+                        def services = ['auth-service','identity-service','form-service','promotion-service',
+                                        'notification-service','dashboard-service','gateway-service','file-service']
+                        sh 'mkdir -p tests/security/reports'
+                        services.each { svc ->
+                            // Trivy reads /kaniko/.docker (mounted in the pod template)
+                            // via the DOCKER_CONFIG env so it can pull from Docker Hub.
+                            // --exit-code 1 blocks the pipeline on CRITICAL/HIGH.
+                            sh """
+                                trivy image \\
+                                    --severity CRITICAL,HIGH \\
+                                    --ignore-unfixed \\
+                                    --exit-code 1 \\
+                                    --no-progress \\
+                                    --format json \\
+                                    --output tests/security/reports/trivy-${svc}.json \\
+                                    --ignorefile .trivyignore \\
+                                    ${REGISTRY}/${svc}:stage-${BUILD_NUMBER}
+                            """
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tests/security/reports/trivy-*.json', allowEmptyArchive: true
                 }
             }
         }
@@ -197,6 +252,50 @@ pipeline {
             }
         }
 
+        stage('OWASP ZAP Baseline') {
+            // Runs ZAP against the gateway service exposed by NodePort (Service
+            // gateway-service:30087). Fails the build on FAIL-level findings; WARNs are
+            // surfaced in the archived report but do not break the pipeline.
+            steps {
+                container('zap') {
+                    sh """
+                        mkdir -p tests/security/reports
+                        export TARGET_URL=http://gateway-service.${K8S_NAMESPACE}.svc.cluster.local:8087
+                        # zap-baseline.py expects writable /zap/wrk
+                        cp -r tests/security/reports /zap/wrk/ || true
+                        zap-baseline.py \\
+                            -t \$TARGET_URL \\
+                            -r zap-report.html \\
+                            -J zap-report.json \\
+                            -w zap-warnings.md \\
+                            -m 1 \\
+                            -I || ZAP_RC=\$?
+                        cp /zap/wrk/zap-report.html      tests/security/reports/ || true
+                        cp /zap/wrk/zap-report.json      tests/security/reports/ || true
+                        cp /zap/wrk/zap-warnings.md      tests/security/reports/ || true
+                        # -I tells ZAP to NOT fail on WARN; we re-fail on rc 1 explicitly.
+                        if [ "\${ZAP_RC:-0}" = "1" ]; then
+                            echo "ZAP detected FAIL-level findings; failing build."
+                            exit 1
+                        fi
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tests/security/reports/zap-report.*', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportDir: 'tests/security/reports',
+                        reportFiles: 'zap-report.html',
+                        reportName: 'OWASP ZAP Baseline Report',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
+                    ])
+                }
+            }
+        }
+
         stage('Performance Baseline') {
             steps {
                 container('python') {
@@ -233,11 +332,28 @@ pipeline {
             cleanWs()
         }
         success {
-            echo "STAGE pipeline succeeded - Build #${BUILD_NUMBER}"
+            slackSend(
+                color: 'good',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":white_check_mark: *${env.JOB_NAME}* #${env.BUILD_NUMBER} succeeded on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}|view log>"
+            )
         }
         failure {
-            // TODO Phase 8 (sec.8.6): replace with slackSend / emailext.
-            echo "STAGE pipeline failed - Build #${BUILD_NUMBER}"
+            slackSend(
+                color: 'danger',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":x: *${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}console|console log>"
+            )
+            emailext(
+                subject: "[CircleGuard] ${env.JOB_NAME} #${env.BUILD_NUMBER} FAILED",
+                body: """The pipeline ${env.JOB_NAME} build #${env.BUILD_NUMBER} on branch ${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'} failed.
+
+Console: ${env.BUILD_URL}console
+Build: ${env.BUILD_URL}""",
+                recipientProviders: [developers(), culprits()]
+            )
         }
     }
 }

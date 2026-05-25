@@ -84,6 +84,24 @@ pipeline {
             }
         }
 
+        stage('SonarQube Analysis') {
+            steps {
+                container('gradle') {
+                    withSonarQubeEnv('sonarqube') {
+                        sh './gradlew sonar -Dsonar.qualitygate.wait=true --info'
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
         stage('Build JARs') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
@@ -133,12 +151,89 @@ pipeline {
             }
         }
 
+        stage('Trivy Image Scan') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+            steps {
+                container('trivy') {
+                    script {
+                        def services = ['auth-service','identity-service','form-service','promotion-service',
+                                        'notification-service','dashboard-service','gateway-service','file-service']
+                        sh 'mkdir -p tests/security/reports'
+                        services.each { svc ->
+                            sh """
+                                trivy image \\
+                                    --severity CRITICAL,HIGH \\
+                                    --ignore-unfixed \\
+                                    --exit-code 1 \\
+                                    --no-progress \\
+                                    --format json \\
+                                    --output tests/security/reports/trivy-${svc}.json \\
+                                    --ignorefile .trivyignore \\
+                                    ${REGISTRY}/${svc}:${IMAGE_TAG}
+                            """
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tests/security/reports/trivy-*.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Semantic Version Tag') {
+            // Computes the next semver from Conventional Commits since the last tag,
+            // creates an annotated `vN.M.P` tag, and pushes it to origin. The tag
+            // becomes the release identifier referenced by the approver below.
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+            steps {
+                container('gradle') {
+                    withCredentials([string(credentialsId: 'github-pat', variable: 'GITHUB_PAT')]) {
+                        sh '''
+                            chmod +x jenkins/scripts/bump-and-tag.sh
+                            # Configure git so the tag is attributable.
+                            git config user.email "jenkins@circleguard.ci"
+                            git config user.name  "CircleGuard CI"
+                            # Use the PAT for the push (origin URL is HTTPS).
+                            git remote set-url --push origin "https://x-access-token:${GITHUB_PAT}@github.com/JuanCamiloMunozB/circle-guard-public.git"
+                            # Capture the new tag emitted on stdout (last line of the script).
+                            NEW_TAG=$(jenkins/scripts/bump-and-tag.sh --push | tee /dev/stderr | tail -1)
+                            echo "SEMVER_TAG=${NEW_TAG}" > semver.env
+                        '''
+                        script {
+                            // Re-tag the freshly-pushed Docker Hub images with the semver tag
+                            // so that the deploy stage below can `kubectl set image` to it.
+                            env.SEMVER_TAG = sh(script: ". ./semver.env && echo \$SEMVER_TAG", returnStdout: true).trim()
+                            echo "Promoting images with semver tag: ${env.SEMVER_TAG}"
+                        }
+                    }
+                }
+                container('kaniko') {
+                    script {
+                        def services = ['auth-service','identity-service','form-service','promotion-service',
+                                        'notification-service','dashboard-service','gateway-service','file-service']
+                        services.each { svc ->
+                            // Kaniko can re-publish a manifest by using --no-push=false with
+                            // --tarPath and skopeo, but the simpler route for re-tagging is
+                            // `crane copy` (bundled in the kaniko:debug image).
+                            sh """
+                                /kaniko/crane copy \\
+                                    ${REGISTRY}/${svc}:${IMAGE_TAG} \\
+                                    ${REGISTRY}/${svc}:${env.SEMVER_TAG}
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Approval: promote to production') {
             steps {
                 // Pause the pipeline OUTSIDE any container block so the pod can idle cheaply
                 // while a human approves. Times out after 30 minutes.
                 timeout(time: 30, unit: 'MINUTES') {
-                    input message: "Promote release ${IMAGE_TAG} to production?",
+                    input message: "Promote release ${env.SEMVER_TAG ?: IMAGE_TAG} to production?",
                           ok: 'Promote',
                           submitter: 'admin',
                           submitterParameter: 'APPROVER'
@@ -253,11 +348,29 @@ pipeline {
             cleanWs()
         }
         success {
-            echo "MASTER pipeline succeeded - Release ${IMAGE_TAG}"
+            slackSend(
+                color: 'good',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":rocket: *${env.JOB_NAME}* released *${env.SEMVER_TAG ?: env.IMAGE_TAG}* (build #${env.BUILD_NUMBER}) <${env.BUILD_URL}|view log>"
+            )
         }
         failure {
-            // TODO Phase 8 (sec.8.6): replace with slackSend / emailext.
-            echo "MASTER pipeline failed - Build #${BUILD_NUMBER}"
+            slackSend(
+                color: 'danger',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":x: *${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}console|console log>"
+            )
+            emailext(
+                subject: "[CircleGuard] MASTER ${env.JOB_NAME} #${env.BUILD_NUMBER} FAILED",
+                body: """The MASTER pipeline ${env.JOB_NAME} build #${env.BUILD_NUMBER} on branch ${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'} failed.
+
+Release tag attempt: ${env.SEMVER_TAG ?: env.IMAGE_TAG}
+Console: ${env.BUILD_URL}console
+Build: ${env.BUILD_URL}""",
+                recipientProviders: [developers(), culprits()]
+            )
         }
     }
 }

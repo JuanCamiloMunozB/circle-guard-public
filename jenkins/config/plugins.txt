@@ -30,6 +30,15 @@ pipeline-utility-steps
 # --- UI quality of life ---
 blueocean
 
+# --- Code quality + security scanning ---
+sonar
+warnings-ng
+
+# --- Notifications (Phase 8 / HU-08): real failure/success messages ---
+slack
+email-ext
+mailer
+
 # --- Configuration as Code (loads jenkins/config/casc.yaml on startup) ---
 configuration-as-code
 job-dsl

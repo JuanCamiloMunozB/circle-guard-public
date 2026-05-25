@@ -91,6 +91,43 @@ spec:
         limits:
           cpu: "1"
           memory: "512Mi"
+    - name: trivy
+      # Image-scanner container. Mounts the same Docker Hub config the kaniko sibling
+      # uses so trivy can authenticate when pulling the freshly-pushed images.
+      image: aquasec/trivy:latest
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      env:
+        - name: DOCKER_CONFIG
+          value: /kaniko/.docker
+      volumeMounts:
+        - name: dockerhub-config
+          mountPath: /kaniko/.docker
+          readOnly: true
+        - name: trivy-cache
+          mountPath: /root/.cache/trivy
+    - name: zap
+      # OWASP ZAP baseline scanner. Used by the stage pipeline against the gateway
+      # service exposed by NodePort. Multi-arch via ghcr.io/zaproxy/zaproxy.
+      image: ghcr.io/zaproxy/zaproxy:stable
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
   volumes:
     - name: dockerhub-config
       secret:
@@ -99,4 +136,6 @@ spec:
           - key: .dockerconfigjson
             path: config.json
     - name: gradle-cache
+      emptyDir: {}
+    - name: trivy-cache
       emptyDir: {}

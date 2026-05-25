@@ -40,6 +40,21 @@ credentials:
               id: "dockerhub-config-json"
               description: "Docker Hub config.json (base64 of {auths: {index.docker.io/v1/: {auth: ...}}}). Mounted by Kaniko in stage/master pod templates."
               file: "${DOCKERHUB_CONFIG_JSON_PATH}"
+          - string:
+              scope: GLOBAL
+              id: "sonarqube-token"
+              description: "SonarQube user token. Read by withSonarQubeEnv('sonarqube') to authenticate ./gradlew sonar."
+              secret: "${SONAR_TOKEN}"
+          - string:
+              scope: GLOBAL
+              id: "slack-webhook"
+              description: "Incoming Webhook URL of the #ci-alerts channel. Consumed by slackSend in every Jenkinsfile's post block."
+              secret: "${SLACK_WEBHOOK_URL}"
+          - string:
+              scope: GLOBAL
+              id: "github-pat"
+              description: "GitHub Personal Access Token with repo:write. Used by jenkins/scripts/bump-and-tag.sh to push the semver tag back to origin."
+              secret: "${GITHUB_PAT}"
 
 jenkins:
   clouds:
@@ -63,6 +78,19 @@ jenkins:
 unclassified:
   location:
     url: "http://localhost:8080/"
+  sonarGlobalConfiguration:
+    installations:
+      - name: "sonarqube"
+        serverUrl: "${SONAR_HOST_URL:-http://sonarqube:9000}"
+        credentialsId: "sonarqube-token"
+        triggers:
+          skipScmCause: false
+          skipUpstreamCause: false
+  slackNotifier:
+    teamDomain: "${SLACK_TEAM_DOMAIN}"
+    tokenCredentialId: "slack-webhook"
+    botUser: false
+    room: "#ci-alerts"
 
 jobs:
   - script: |
