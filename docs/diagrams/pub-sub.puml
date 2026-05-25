@@ -1,0 +1,27 @@
+@startuml
+title CircleGuard - Publisher Subscriber con Kafka
+
+actor Student
+participant "form-service" as Form
+participant Kafka
+participant "promotion-service" as Promotion
+participant "notification-service" as Notification
+
+Student -> Form : submitSurvey()
+Form -> Kafka : publish survey.submitted
+Kafka -> Promotion : consume survey.submitted
+Promotion -> Kafka : publish promotion.status.changed
+Promotion -> Kafka : publish alert.priority
+Promotion -> Kafka : publish circle.fenced
+Form -> Kafka : publish certificate.validated
+Kafka -> Promotion : consume certificate.validated
+Kafka -> Notification : consume promotion.status.changed
+Kafka -> Notification : consume alert.priority
+Kafka -> Notification : consume circle.fenced
+
+note over Kafka
+Los eventos de auditoria (audit.identity.accessed y notification.audit)
+existen en el sistema, pero se omiten aqui para enfocar el flujo de negocio.
+end note
+
+@enduml

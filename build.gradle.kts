@@ -18,10 +18,16 @@ allprojects {
 subprojects {
     apply(plugin = "java")
     apply(plugin = "org.jetbrains.kotlin.jvm")
+    apply(plugin = "jacoco")
     extensions.configure<JavaPluginExtension> {
         toolchain {
             languageVersion.set(JavaLanguageVersion.of(21))
         }
+    }
+
+    // JaCoCo 0.8.11+ supports JDK 21 bytecode. Earlier versions crash on JDK 21 classes.
+    extensions.configure<JacocoPluginExtension> {
+        toolVersion = "0.8.11"
     }
 
     dependencies {
@@ -64,6 +70,78 @@ subprojects {
         shouldRunAfter(tasks.named("test"))
         useJUnitPlatform {
             includeTags("integration")
+        }
+    }
+
+    // --- JaCoCo coverage report ---
+    // The report aggregates execution data from BOTH the `test` and `integrationTest`
+    // tasks (when executed) so the headline number reflects unit + integration coverage.
+    //
+    // Exclusions are deliberately conservative: only main()-only Application
+    // classes and pure data carriers (DTOs, JPA/Neo4j entities, Spring config,
+    // domain events, custom exceptions) are stripped. Controllers, services,
+    // repositories interfaces with default methods, listeners and clients
+    // remain in the denominator so the metric reflects real business code.
+    val coverageExcludes = listOf(
+        "**/*Application.class",
+        "**/dto/**",
+        "**/model/**",
+        "**/config/**",
+        "**/event/**",
+        "**/exception/**",
+        // Spring Security configuration classes are bean wiring — they declare
+        // SecurityFilterChain, AuthenticationManager, PasswordEncoder, etc. We
+        // exclude them for the same reason we exclude **/config/** (boilerplate
+        // tested in integration). Filters and providers with real logic stay in.
+        "**/SecurityConfig.class"
+    )
+
+    tasks.named<JacocoReport>("jacocoTestReport") {
+        dependsOn(tasks.named("test"))
+        // Pick up exec data from integrationTest if it ran in this invocation.
+        executionData(
+            fileTree(layout.buildDirectory).include("/jacoco/test.exec", "/jacoco/integrationTest.exec")
+        )
+        classDirectories.setFrom(
+            files(classDirectories.files.map {
+                fileTree(it) { exclude(coverageExcludes) }
+            })
+        )
+        reports {
+            xml.required.set(true)
+            html.required.set(true)
+            csv.required.set(false)
+        }
+    }
+
+    tasks.named<org.gradle.api.tasks.testing.Test>("test") {
+        finalizedBy(tasks.named("jacocoTestReport"))
+    }
+    tasks.named<org.gradle.api.tasks.testing.Test>("integrationTest") {
+        finalizedBy(tasks.named("jacocoTestReport"))
+    }
+
+    // Quality gate: fail the build if a service drops below the agreed line floor.
+    // The gate is wired but NOT bound to `check` here so the team can run a
+    // baseline `gradlew test jacocoTestReport` for diagnosis without failing
+    // immediately. Once every service is at >=80% in CI we will bind this to
+    // `check` to enforce it on every build.
+    tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+        dependsOn(tasks.named("jacocoTestReport"))
+        classDirectories.setFrom(
+            files(classDirectories.files.map {
+                fileTree(it) { exclude(coverageExcludes) }
+            })
+        )
+        violationRules {
+            rule {
+                element = "BUNDLE"
+                limit {
+                    counter = "LINE"
+                    value = "COVEREDRATIO"
+                    minimum = "0.80".toBigDecimal()
+                }
+            }
         }
     }
 }

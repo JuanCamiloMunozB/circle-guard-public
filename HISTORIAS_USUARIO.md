@@ -109,23 +109,25 @@ desplegable, y consolidar la documentación y la evidencia para la presentación
   - Al menos una alerta crítica configurada.
 - **Puntos:** 8 · **Prioridad:** Alta · **Responsable:** Jose Manuel (Ops)
 
-### HU-08 — Calidad y seguridad en el pipeline (SonarQube, Trivy, ZAP, semver)
-- **Como** equipo, **quiero** análisis estático, escaneo de imágenes y de seguridad más
-  versionado automático, **para** cumplir el rubro de CI/CD avanzado y seguridad.
+### HU-08 — Calidad y seguridad en el pipeline (SonarQube, Trivy, ZAP, semver, notificaciones)
+- **Como** equipo, **quiero** análisis estático, escaneo de imágenes y de seguridad, versionado
+  automático y notificaciones reales de fallo, **para** cumplir el rubro de CI/CD avanzado.
 - **Criterios de aceptación:**
   - SonarQube con quality gate bloqueante; Trivy falla ante vulnerabilidades críticas.
   - OWASP ZAP baseline contra servicios expuestos en stage.
   - Versionado semántico derivado de Conventional Commits; aprobación manual a prod.
+  - Los bloques `post { failure }` envían notificación real (Slack/email), no solo `echo`.
 - **Puntos:** 8 · **Prioridad:** Media · **Responsable:** Jose Manuel (Ops) + Juan Camilo (Dev)
 
-### HU-09 — Suite de pruebas completa y de estrés en Azure
-- **Como** equipo, **quiero** unitarias, integración, E2E y Locust ejecutándose en la nube,
+### HU-09 — Suite de pruebas completa y de estrés en Azure (8 servicios)
+- **Como** equipo, **quiero** unitarias, integración, E2E y Locust cubriendo los 8 servicios,
   **para** evidenciar calidad sin cargar las máquinas locales.
 - **Criterios de aceptación:**
   - Cobertura unitaria ≥70% en los servicios de menor cobertura (JaCoCo).
-  - Integración con Testcontainers y E2E verdes en pipeline.
+  - Integración con Testcontainers y E2E verdes, **incluyendo gateway, file y notification**.
+  - `locustfile.py` con tasks para los 8 servicios (incl. gateway, file, notification).
   - Locust ejecutado contra el despliegue de stage en AKS; reportes archivados.
-- **Puntos:** 5 · **Prioridad:** Media · **Responsable:** Juan Camilo (Dev)
+- **Puntos:** 8 · **Prioridad:** Media · **Responsable:** Juan Camilo (Dev), Locust depende de Ops
 
 ### HU-10 — Feature Toggle, Change Management y Release Notes
 - **Como** equipo, **quiero** el patrón Feature Toggle, el proceso de cambios y release notes
@@ -145,16 +147,26 @@ desplegable, y consolidar la documentación y la evidencia para la presentación
   - Costos de infraestructura documentados; manual de operaciones básico; guion de video.
 - **Puntos:** 5 · **Prioridad:** Media · **Responsable:** Jose Manuel (Ops) + Juan Camilo (Dev)
 
-**Total Iteración 2: 34 puntos.**
+### HU-12 — Seguridad: secretos, RBAC de aplicación y TLS
+- **Como** operador, **quiero** secretos fuera de Git, RBAC de privilegio mínimo y TLS,
+  **para** cumplir el rubro de Seguridad (5%).
+- **Criterios de aceptación:**
+  - `circleguard-secrets` no se versiona con valores reales; se crea en el clúster o vía Jenkins.
+  - RBAC de Jenkins (ya existente) complementado con un ServiceAccount de aplicación mínimo.
+  - TLS configurado en gateway y dashboard vía Ingress; responden por HTTPS.
+  - Trivy y SonarQube corren en cada build (escaneo continuo).
+- **Puntos:** 5 · **Prioridad:** Alta · **Responsable:** Jose Manuel (Ops)
+
+**Total Iteración 2: 42 puntos** (incluye HU-12 Seguridad y el alcance ampliado de pruebas).
 
 ---
 
 ## 4. Resumen de asignación
 
-| Responsable | Historias | Puntos |
-|---|---|---|
-| Juan Camilo Muñoz (Dev) | HU-01, HU-06, HU-09, HU-10 + mitad de HU-02/HU-08/HU-11 | ~28 |
-| Jose Manuel Cardona (Ops) | HU-03, HU-04, HU-05, HU-07 + mitad de HU-02/HU-08/HU-11 | ~37 |
+| Responsable               | Historias                                                      | Puntos |
+| ------------------------- | -------------------------------------------------------------- | ------ |
+| Juan Camilo Muñoz (Dev)   | HU-01, HU-06, HU-09, HU-10 + mitad de HU-02/HU-08/HU-11        | ~31    |
+| Jose Manuel Cardona (Ops) | HU-03, HU-04, HU-05, HU-07, HU-12 + mitad de HU-02/HU-08/HU-11 | ~42    |
 
 La carga de Ops es mayor en la Iteración 1 (infraestructura intensiva); la de Dev se
 concentra en patrones y pruebas en la Iteración 2. Las historias compartidas (HU-02, HU-08,

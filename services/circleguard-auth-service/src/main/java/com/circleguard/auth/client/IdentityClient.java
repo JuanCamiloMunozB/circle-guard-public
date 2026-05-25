@@ -33,9 +33,12 @@ public class IdentityClient {
     }
 
     /**
-     * Test-friendly constructor: lets unit tests inject a stub RestTemplate.
+     * Visible-for-testing constructor: lets unit and integration tests inject a
+     * stub or real RestTemplate together with the target URL of identity-service.
+     * Public so test classes outside the {@code client} package (e.g.
+     * {@code com.circleguard.auth.integration.*}) can use it.
      */
-    IdentityClient(RestTemplate restTemplate, String identityBaseUrl) {
+    public IdentityClient(RestTemplate restTemplate, String identityBaseUrl) {
         this.restTemplate = restTemplate;
         this.identityBaseUrl = identityBaseUrl;
     }

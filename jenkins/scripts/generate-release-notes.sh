@@ -5,8 +5,13 @@
 #   generate-release-notes.sh <image_tag> <build_number> <namespace> <output_file>
 #
 # Commits are grouped by Conventional Commits prefix:
-#   feat -> Features
-#   fix  -> Bug Fixes
+#   feat     -> Features
+#   fix      -> Bug Fixes
+#   docs     -> Documentation
+#   test     -> Tests
+#   refactor -> Refactors
+#   ci       -> CI/CD
+#   chore    -> Chores
 # Anything else goes under "Other Changes".
 
 set -euo pipefail
@@ -42,14 +47,24 @@ ALL_COMMITS="$(git log "${RANGE_ARGS[@]}" --pretty='%s|%an' || true)"
 classify() {
     local subject="$1"
     case "$subject" in
-        feat\(*\):*|feat:*) echo features ;;
-        fix\(*\):*|fix:*)   echo fixes ;;
-        *)                  echo other ;;
+        feat\(*\):*|feat:*)         echo features ;;
+        fix\(*\):*|fix:*)           echo fixes ;;
+        docs\(*\):*|docs:*)         echo docs ;;
+        test\(*\):*|test:*)         echo tests ;;
+        refactor\(*\):*|refactor:*) echo refactors ;;
+        ci\(*\):*|ci:*)             echo ci ;;
+        chore\(*\):*|chore:*)       echo chores ;;
+        *)                           echo other ;;
     esac
 }
 
 FEATURES=""
 FIXES=""
+DOCS=""
+TESTS=""
+REFACTORS=""
+CI=""
+CHORES=""
 OTHER=""
 
 while IFS='|' read -r subject author; do
@@ -58,6 +73,11 @@ while IFS='|' read -r subject author; do
     case "$(classify "$subject")" in
         features) FEATURES+="${line}"$'\n' ;;
         fixes)    FIXES+="${line}"$'\n' ;;
+        docs)     DOCS+="${line}"$'\n' ;;
+        tests)    TESTS+="${line}"$'\n' ;;
+        refactors) REFACTORS+="${line}"$'\n' ;;
+        ci)       CI+="${line}"$'\n' ;;
+        chores)   CHORES+="${line}"$'\n' ;;
         *)        OTHER+="${line}"$'\n' ;;
     esac
 done <<< "$ALL_COMMITS"
@@ -67,6 +87,11 @@ done <<< "$ALL_COMMITS"
 CHANGES=""
 [[ -n "$FEATURES" ]] && CHANGES+="### Features"$'\n\n'"$FEATURES"$'\n'
 [[ -n "$FIXES" ]]    && CHANGES+="### Bug Fixes"$'\n\n'"$FIXES"$'\n'
+[[ -n "$DOCS" ]]     && CHANGES+="### Documentation"$'\n\n'"$DOCS"$'\n'
+[[ -n "$TESTS" ]]    && CHANGES+="### Tests"$'\n\n'"$TESTS"$'\n'
+[[ -n "$REFACTORS" ]] && CHANGES+="### Refactors"$'\n\n'"$REFACTORS"$'\n'
+[[ -n "$CI" ]]       && CHANGES+="### CI/CD"$'\n\n'"$CI"$'\n'
+[[ -n "$CHORES" ]]   && CHANGES+="### Chores"$'\n\n'"$CHORES"$'\n'
 [[ -n "$OTHER" ]]    && CHANGES+="### Other Changes"$'\n\n'"$OTHER"$'\n'
 
 if [[ -z "$CHANGES" ]]; then
@@ -95,8 +120,10 @@ cat > "$OUTPUT_FILE" <<EOF
 | identity-service     | 8083 | ${IMAGE_TAG}   |
 | form-service         | 8086 | ${IMAGE_TAG}   |
 | promotion-service    | 8088 | ${IMAGE_TAG}   |
-| notification-service | 8082 | ${IMAGE_TAG}   |
 | dashboard-service    | 8084 | ${IMAGE_TAG}   |
+| gateway-service      | 8080 | ${IMAGE_TAG}   |
+| file-service         | 8087 | ${IMAGE_TAG}   |
+| notification-service | 8082 | ${IMAGE_TAG}   |
 
 ---
 
@@ -111,6 +138,13 @@ ${CHANGES}
 - Kubernetes namespace: ${NAMESPACE}
 - Infrastructure: PostgreSQL 16, Neo4j 5.26, Kafka 7.6.0, Redis 7.2
 - Rollout strategy: Rolling update (zero downtime)
+
+---
+
+## Feature Toggles activos
+
+- FEATURE_SMS_ALERTS_ENABLED: ${FEATURE_SMS_ALERTS_ENABLED:-false}
+- Afecta el envio de SMS en notification-service sin recompilar la imagen.
 EOF
 
 echo "Release notes written to: ${OUTPUT_FILE}"
