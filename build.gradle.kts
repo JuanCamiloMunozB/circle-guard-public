@@ -11,7 +11,8 @@ plugins {
 
 sonar {
     properties {
-        property("sonar.projectKey", "circleguard")
+        property("sonar.organization", "juancamuba")
+        property("sonar.projectKey", "JuanCamiloMunozB_circle-guard-public")
         property("sonar.projectName", "CircleGuard")
         property("sonar.sourceEncoding", "UTF-8")
         // Aggregated coverage report paths (one per service module).

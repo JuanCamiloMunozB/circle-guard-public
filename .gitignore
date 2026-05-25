@@ -71,9 +71,13 @@ jenkins/config/.kubeconfig-incontainer
 k8s/jenkins/dockerhub-secret.yaml
 jenkins/config/.dockerconfig.json
 
+# Jenkins AKS credentials Secret (only the .example is versioned)
+k8s/jenkins/jenkins-secret.yaml
+
 CLAUDE.md
 PLAN_IMPLEMENTACION_V2.md
 GUIA_DECISIONES_ARQUITECTONICAS.md
+Handoff.md
 
 # Terraform
 **/.terraform/
