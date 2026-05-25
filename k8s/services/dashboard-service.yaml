@@ -3,9 +3,10 @@ kind: Service
 metadata:
   name: dashboard-service
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: dashboard-service
   ports:
     - port: 8084
       targetPort: 8084
+      nodePort: 30084
