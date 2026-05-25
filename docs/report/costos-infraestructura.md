@@ -31,7 +31,7 @@
 | prod  | `Standard_B2ps_v2`  | ARM64 | 2 | 8 GB  | ~0.0498 USD/h (x2 nodos) |
 
 > **Implicacion del cambio a ARM64:** todas las imagenes Docker del proyecto
-> (`docker.io/<usuario>/<servicio>:<tag>`) deben publicarse como **multi-arch
+> (`docker.io/circleguard/<servicio>:<tag>`) deben publicarse como **multi-arch
 > (`linux/amd64,linux/arm64`)** o **arm64-only**. Las imagenes base oficiales para Java
 > (`eclipse-temurin:21-jre-jammy`) ya son multi-arch. El build con Kaniko debe usar
 > `--customPlatform=linux/arm64` o build matrix.
@@ -79,6 +79,7 @@ liberar todo: `terraform destroy`.
 | 2026-05-24 | `terraform apply` dev (`aks-cg-dev`, 1x B2pls_v2, K8s 1.33.11) | dev | ~6 min (provisioning) + ~2 min (kubectl) = ~8 min | ~0.008 | ~99.99 | Jose M. |
 | 2026-05-24 | `az aks stop aks-cg-dev` (powerState=Stopped verificado) | dev | n/a | 0.00 | ~99.99 | Jose M. |
 | 2026-05-24 | Discos+LB residuales dev (apagado) | dev | continuo | ~0.18/dia | (se acumula) | Jose M. |
+| 2026-05-24 | HU-04: validacion de manifiestos K8s (8 servicios + infra deps) con `kind` local + `kubectl apply --dry-run=client/server`. AKS NO encendido: las imagenes ARM64 multi-arch aun no existen en Docker Hub, asi que `Ready` se cerrara en Fase 5/HU-05 cuando Kaniko publique. | dev (no tocado) | 0 min en AKS | 0.00 | ~99.99 | Jose M. |
 
 > Actualizar esta tabla **cada** vez que se ejecute `az aks start/stop` o un `terraform
 > apply/destroy` en cualquier ambiente.

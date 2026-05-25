@@ -68,7 +68,7 @@ ops -down-> ct_tfstate : terraform init/apply\n(backend remoto con lock)
 dev -down-> aks_dev : kubectl get nodes\n(via kubeconfig)
 ops -right-> aks_dev : az aks start/stop\n(mandato de costo)
 
-aks_dev -up-> dockerhub : pull docker.io/<user>/<svc>:<tag>
+aks_dev -up-> dockerhub : pull docker.io/circleguard/<svc>:<tag>
 aks_stage -up-> dockerhub
 aks_prod -up-> dockerhub
 
