@@ -28,8 +28,9 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# kubectl pinned to a known version for reproducibility
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+# kubectl pinned to a known version; arch-aware for multi-arch builds (amd64 + arm64)
+RUN KUBECTL_ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" \
        -o /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl
 
