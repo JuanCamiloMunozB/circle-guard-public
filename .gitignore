@@ -63,6 +63,11 @@ tests/performance/locust-*.csv
 # Generated kubeconfig for the Jenkins container (created by setup-kubeconfig.ps1)
 jenkins/config/.kubeconfig-incontainer
 
+# Real Docker Hub registry credentials for Kaniko (never commit).
+# Only the .example template is versioned; the .yaml is built from it locally.
+k8s/jenkins/dockerhub-secret.yaml
+jenkins/config/.dockerconfig.json
+
 CLAUDE.md
 PLAN_IMPLEMENTACION_V2.md
 GUIA_DECISIONES_ARQUITECTONICAS.md

@@ -22,8 +22,10 @@ ssh-credentials
 junit
 htmlpublisher
 
-# --- Kubernetes deployment ---
+# --- Kubernetes: deployments (kubectl) + ephemeral build agents in AKS pods ---
 kubernetes-cli
+kubernetes
+pipeline-utility-steps
 
 # --- UI quality of life ---
 blueocean

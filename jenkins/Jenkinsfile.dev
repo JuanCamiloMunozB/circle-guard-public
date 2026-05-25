@@ -1,5 +1,19 @@
+// CircleGuard dev pipeline.
+//
+// Runs on a local Jenkins agent labelled 'local-kaniko' (registered manually on the
+// dev workstation: Git Bash / WSL Ubuntu + Docker Desktop). NEVER schedules on AKS
+// (CLAUDE.md sec.5.1 / sec.5.4: dev does not burn Azure credit).
+//
+// Image build:
+//   - Uses Kaniko in a one-shot Docker container instead of `docker build`.
+//   - No layers persist on the host (CLAUDE.md sec.3.1).
+//   - Targets arm64 only because the AKS nodes are ARM64 (Standard_B*pls_v2).
+//
+// Deploy/Rollout/Smoke stages are kept and target whatever `K8S_API_SERVER` resolves
+// to: a local kind cluster for purely-local validation, or AKS-dev only when it is
+// already powered on for another reason. They are NOT a justification to start AKS.
 pipeline {
-    agent any
+    agent { label 'local-kaniko' }
 
     options {
         timeout(time: 30, unit: 'MINUTES')
@@ -9,12 +23,15 @@ pipeline {
     }
 
     parameters {
-        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
+        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Kaniko image build (reuse existing tags)')
+        booleanParam(name: 'SKIP_DEPLOY',       defaultValue: false, description: 'Skip Deploy/Rollout/Smoke stages (build+push only)')
     }
 
     environment {
-        REGISTRY        = 'circleguard'
-        K8S_NAMESPACE   = 'circleguard-dev'
+        REGISTRY       = 'docker.io/circleguard'
+        K8S_NAMESPACE  = 'circleguard-dev'
+        KANIKO_IMAGE   = 'gcr.io/kaniko-project/executor:debug'
+        TARGET_PLATFORM = 'linux/arm64'
     }
 
     stages {
@@ -28,7 +45,7 @@ pipeline {
             }
         }
 
-        stage('Build & Unit Tests') {
+        stage('Unit Tests') {
             steps {
                 sh './gradlew :services:circleguard-auth-service:test \
                               :services:circleguard-identity-service:test \
@@ -78,51 +95,79 @@ pipeline {
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Build & Push Images (Kaniko)') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
-                script {
-                    def serviceList = [
-                        [name: 'auth-service',         dir: 'circleguard-auth-service'],
-                        [name: 'identity-service',     dir: 'circleguard-identity-service'],
-                        [name: 'form-service',         dir: 'circleguard-form-service'],
-                        [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
-                        [name: 'notification-service', dir: 'circleguard-notification-service'],
-                        [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
-                        [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
-                        [name: 'file-service',         dir: 'circleguard-file-service'],
-                    ]
-                    serviceList.each { svc ->
-                        sh "docker build -f services/${svc.dir}/Dockerfile -t ${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} ."
-                        sh "docker tag ${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} ${REGISTRY}/${svc.name}:dev-latest"
+                withCredentials([file(credentialsId: 'dockerhub-config-json', variable: 'DOCKERHUB_CONFIG')]) {
+                    script {
+                        def services = [
+                            [name: 'auth-service',         dir: 'circleguard-auth-service'],
+                            [name: 'identity-service',     dir: 'circleguard-identity-service'],
+                            [name: 'form-service',         dir: 'circleguard-form-service'],
+                            [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
+                            [name: 'notification-service', dir: 'circleguard-notification-service'],
+                            [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
+                            [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
+                            [name: 'file-service',         dir: 'circleguard-file-service'],
+                        ]
+                        services.each { svc ->
+                            // Each Kaniko invocation is a one-shot container: no daemon, no
+                            // local layer cache, no images left in `docker images` afterwards.
+                            sh """
+                                docker run --rm \\
+                                    -v \$(pwd):/workspace \\
+                                    -v \$DOCKERHUB_CONFIG:/kaniko/.docker/config.json:ro \\
+                                    ${KANIKO_IMAGE} \\
+                                    --context=/workspace \\
+                                    --dockerfile=services/${svc.dir}/Dockerfile \\
+                                    --destination=${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} \\
+                                    --destination=${REGISTRY}/${svc.name}:dev-latest \\
+                                    --customPlatform=${TARGET_PLATFORM} \\
+                                    --single-snapshot \\
+                                    --no-push-cache
+                            """
+                        }
                     }
+                }
+            }
+            post {
+                always {
+                    // Belt-and-suspenders: even though Kaniko leaves no layers, prune any
+                    // intermediate buffers from previous unrelated builds.
+                    sh 'docker system prune -af --filter "until=1h" || true'
                 }
             }
         }
 
         stage('Deploy to Dev') {
+            when { not { expression { params.SKIP_DEPLOY } } }
             steps {
+                // Targets whatever K8S_API_SERVER points at (kind for local-only validation
+                // or AKS-dev when already powered on). Does NOT start AKS.
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     sh "kubectl apply -f k8s/namespaces.yaml"
                     sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/deployments/ -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/auth-service         auth-service=${REGISTRY}/auth-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/identity-service     identity-service=${REGISTRY}/identity-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/form-service         form-service=${REGISTRY}/form-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/promotion-service    promotion-service=${REGISTRY}/promotion-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/notification-service notification-service=${REGISTRY}/notification-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/dashboard-service    dashboard-service=${REGISTRY}/dashboard-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    script {
+                        ['auth-service', 'identity-service', 'form-service',
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
+                            sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                        }
+                    }
                 }
             }
         }
 
         stage('Wait for Rollout') {
+            when { not { expression { params.SKIP_DEPLOY } } }
             steps {
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
-                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
                             sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
                         }
                     }
@@ -131,6 +176,7 @@ pipeline {
         }
 
         stage('Smoke Tests') {
+            when { not { expression { params.SKIP_DEPLOY } } }
             steps {
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     script {
@@ -141,6 +187,8 @@ pipeline {
                             [svc: 'promotion-service',    port: '8088'],
                             [svc: 'notification-service', port: '8082'],
                             [svc: 'dashboard-service',    port: '8084'],
+                            [svc: 'gateway-service',      port: '8087'],
+                            [svc: 'file-service',         port: '8085'],
                         ]
                         checks.each { c ->
                             def health = sh(
@@ -167,6 +215,9 @@ pipeline {
             echo "DEV pipeline succeeded - Build #${BUILD_NUMBER}"
         }
         failure {
+            // TODO Phase 8 (sec.8.6): replace this echo with a real slackSend / emailext
+            // notification using a credential stored in Jenkins. Keep the echo as a fallback
+            // for environments without notification plugins.
             echo "DEV pipeline failed - Build #${BUILD_NUMBER}"
         }
     }
