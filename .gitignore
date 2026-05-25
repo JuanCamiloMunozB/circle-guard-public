@@ -66,3 +66,22 @@ jenkins/config/.kubeconfig-incontainer
 CLAUDE.md
 PLAN_IMPLEMENTACION_V2.md
 GUIA_DECISIONES_ARQUITECTONICAS.md
+
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# tfvars con valores reales NO se versionan
+infra/terraform/environments/*/terraform.tfvars.local
+infra/terraform/bootstrap/terraform.tfvars.local

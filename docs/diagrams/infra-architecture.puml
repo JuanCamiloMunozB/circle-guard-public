@@ -1,0 +1,97 @@
+@startuml CircleGuard - Infraestructura Azure (HU-03)
+
+!define AZURE_COLOR #0072C6
+skinparam backgroundColor #FAFAFA
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #555555
+  RoundCorner 10
+}
+skinparam cloud {
+  BackgroundColor #EAF4FF
+  BorderColor AZURE_COLOR
+}
+skinparam component {
+  BackgroundColor #F4F4F4
+  BorderColor #888888
+}
+skinparam ArrowColor #444444
+skinparam DefaultFontName "Segoe UI"
+title CircleGuard - Topologia Azure (Terraform) - HU-03
+
+actor "Ops\n(Jose M.)" as ops
+actor "Dev\n(Juan Camilo)" as dev
+
+cloud "Docker Hub\n(repositorios publicos)" as dockerhub
+
+cloud "Azure - Subscription\n(Azure for Students)\nRegion: southcentralus" as azsub {
+
+  rectangle "RG: rg-cg-tfstate" as rg_tfstate {
+    component "Storage Account\nst-cg-tfstate-<sufijo>\n(StorageV2, LRS, TLS1.2)" as st_tfstate
+    component "Blob Container\n[tfstate]\nkeys: dev/stage/prod.tfstate" as ct_tfstate
+    st_tfstate -down- ct_tfstate
+  }
+
+  rectangle "RG: rg-cg-dev (ENCENDIDO en plan)" as rg_dev {
+    rectangle "VNet 10.10.0.0/16" as vnet_dev {
+      rectangle "Subnet AKS\n10.10.1.0/24" as snet_dev
+    }
+    component "AKS aks-cg-dev\nv1.33.11, SKU Free\n1x Standard_B2pls_v2 (ARM64)\nSystemAssigned MI" as aks_dev
+    component "Storage Account\nst-cg-dev-<sufijo>\n(artifacts, LRS)" as st_dev
+    snet_dev -down- aks_dev
+    rectangle "Node RG (auto)\nrg-cg-dev-aks-nodes" as nrg_dev {
+      component "VMSS system\n(1x B2pls_v2)" as vmss_dev
+      component "Managed Disk OS\n(32 GiB)" as disk_dev
+      component "Load Balancer\nStandard" as lb_dev
+    }
+    aks_dev -down-> vmss_dev
+    aks_dev -down-> disk_dev
+    aks_dev -down-> lb_dev
+  }
+
+  rectangle "RG: rg-cg-stage (PLAN ONLY)" as rg_stage {
+    rectangle "VNet 10.20.0.0/16" as vnet_stage
+    component "AKS aks-cg-stage\n1x Standard_B2pls_v2 (ARM64)" as aks_stage
+    component "Storage st-cg-stage-..." as st_stage
+    vnet_stage -down- aks_stage
+  }
+
+  rectangle "RG: rg-cg-prod (PLAN ONLY)" as rg_prod {
+    rectangle "VNet 10.30.0.0/16" as vnet_prod
+    component "AKS aks-cg-prod\n2x Standard_B2ps_v2 (ARM64)" as aks_prod
+    component "Storage st-cg-prod-...\n(GRS)" as st_prod
+    vnet_prod -down- aks_prod
+  }
+}
+
+ops -down-> ct_tfstate : terraform init/apply\n(backend remoto con lock)
+dev -down-> aks_dev : kubectl get nodes\n(via kubeconfig)
+ops -right-> aks_dev : az aks start/stop\n(mandato de costo)
+
+aks_dev -up-> dockerhub : pull docker.io/<user>/<svc>:<tag>
+aks_stage -up-> dockerhub
+aks_prod -up-> dockerhub
+
+note bottom of rg_tfstate
+  Bootstrap (UNA vez) con estado local.
+  Luego cada ambiente usa este container
+  como backend remoto con bloqueo.
+end note
+
+note bottom of rg_dev
+  Unico ambiente APLICADO en HU-03.
+  Encendido < 1 hora para validacion;
+  apagado inmediato con `az aks stop`.
+end note
+
+note bottom of azsub
+  Credito: 100 USD (Azure for Students).
+  Cuota PBS Family (ARM64 v2): 6 vCPU.
+  Policy permite solo: mexicocentral, brazilsouth,
+  chilecentral, southcentralus, westus3.
+  AKS K8s 1.33+ (1.30-1.32 son LTS-only).
+  dev (2 vCPU) + stage (2 vCPU) caben juntos;
+  prod (4 vCPU) requiere dev+stage apagados.
+end note
+
+@enduml
