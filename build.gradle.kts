@@ -97,6 +97,15 @@ subprojects {
         useJUnitPlatform {
             includeTags("integration")
         }
+        // Explicitly propagate Docker socket env vars to the forked test JVM.
+        // Testcontainers (used by identity-service and dashboard-service) needs to
+        // reach the Docker daemon. Gradle daemons are long-lived and may have been
+        // started before Jenkins set these variables, so hardcoding them here ensures
+        // the test fork always has them regardless of daemon lifecycle.
+        // In WSL2 + Docker Desktop the socket is at /var/run/docker.sock and is
+        // bind-mounted into the Jenkins container via docker-compose.
+        environment("DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock")
+        environment("TESTCONTAINERS_RYUK_DISABLED", System.getenv("TESTCONTAINERS_RYUK_DISABLED") ?: "true")
     }
 
     // --- JaCoCo coverage report ---

@@ -49,7 +49,11 @@ import static org.mockito.Mockito.when;
         // Fast offset commits: consumer position is persisted quickly between tests so
         // a message consumed in test N is not re-delivered to test N+1.
         "spring.kafka.consumer.enable-auto-commit=true",
-        "spring.kafka.consumer.properties.auto.commit.interval.ms=100"
+        "spring.kafka.consumer.properties.auto.commit.interval.ms=100",
+        // application-test.yml sets auto-startup=false to prevent listeners from
+        // connecting during unit tests (no broker available there). Integration tests
+        // use an embedded broker, so listeners MUST start; override it here.
+        "spring.kafka.listener.auto-startup=true"
 })
 // All topics that have @KafkaListener beans in this service must be listed here.
 // waitForListenerAssignment() iterates over EVERY listener container; if any
