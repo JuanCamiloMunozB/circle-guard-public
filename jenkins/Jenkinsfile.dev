@@ -103,12 +103,19 @@ pipeline {
 
         stage('Integration Tests') {
             steps {
+                // --no-daemon: forked test JVMs are children of the current shell process
+                // (which has the docker group via the Jenkins agent session) rather than
+                // children of a long-lived Gradle daemon that may have been started before
+                // the docker group was assigned. This prevents EACCES on /var/run/docker.sock
+                // inside the test JVM even when the shell itself can reach the socket fine.
+                // --stop before running ensures no stale daemon with wrong groups is reused.
+                sh './gradlew --stop'
                 sh './gradlew :services:circleguard-form-service:integrationTest \
                               :services:circleguard-promotion-service:integrationTest \
                               :services:circleguard-notification-service:integrationTest \
                               :services:circleguard-identity-service:integrationTest \
                               :services:circleguard-dashboard-service:integrationTest \
-                    --continue'
+                    --no-daemon --continue'
             }
             post {
                 always {
