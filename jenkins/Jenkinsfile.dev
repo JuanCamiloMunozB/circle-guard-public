@@ -37,6 +37,12 @@ pipeline {
         // inside any WSL2 distro where WSL Integration is enabled:
         //   Docker Desktop → Settings → Resources → WSL Integration → tick Ubuntu distro.
         DOCKER_HOST                  = 'unix:///var/run/docker.sock'
+        // docker-java 3.3.x defaults to API 1.41; Docker Desktop 4.61 / Engine 29.x
+        // enforces a minimum of 1.44 and rejects anything below. Pinning to 1.44 here
+        // puts it in the shell environment so the Gradle daemon and forked test JVMs
+        // all inherit it. The Gradle integrationTest task also passes it as an env var
+        // and as a JVM system property (-DDOCKER_API_VERSION) for belt-and-suspenders.
+        DOCKER_API_VERSION           = '1.44'
         // Ryuk (Testcontainers resource reaper) can fail in restricted CI environments.
         // Disabling it avoids privilege errors; leftover containers are removed by the
         // `docker system prune` step at the end of Build & Push Images.
@@ -80,6 +86,10 @@ pipeline {
                 sh '''
                     echo "=== whoami / groups ==="
                     id
+                    echo "=== Docker env vars ==="
+                    echo "DOCKER_HOST=${DOCKER_HOST}"
+                    echo "DOCKER_API_VERSION=${DOCKER_API_VERSION}"
+                    echo "TESTCONTAINERS_RYUK_DISABLED=${TESTCONTAINERS_RYUK_DISABLED}"
                     echo "=== Docker socket stat ==="
                     stat /var/run/docker.sock 2>&1 || echo "stat failed"
                     ls -la /var/run/docker.sock 2>&1 || echo "ls failed"
