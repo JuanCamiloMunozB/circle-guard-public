@@ -104,13 +104,17 @@ subprojects {
         //
         // DOCKER_HOST  — points Testcontainers' EnvironmentAndSystemPropertyClientProviderStrategy
         //                at the WSL2 socket mounted into the Jenkins container.
-        // DOCKER_API_VERSION — pins the docker-java API version so it skips the
-        //                negotiation handshake that can fail against newer Docker Desktop
-        //                daemons (Engine 25+). 1.41 is supported by all Engine 20.10+.
+        // DOCKER_API_VERSION — docker-java 3.3.3 (Testcontainers 1.19.x) defaults to
+        //                API 1.41, but Docker Desktop 4.61 / Engine 29.x enforces a
+        //                minimum of 1.44 and rejects anything below with:
+        //                "client version 1.41 is too old. Minimum supported API version
+        //                is 1.44". Pinning to 1.44 satisfies the daemon minimum while
+        //                remaining fully compatible with the operations Testcontainers
+        //                uses (create/start/stop/remove container, pull image).
         // TESTCONTAINERS_RYUK_DISABLED — Ryuk needs to bind-mount the socket itself,
         //                which requires extra privileges; disabling avoids the error.
         environment("DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock")
-        environment("DOCKER_API_VERSION", System.getenv("DOCKER_API_VERSION") ?: "1.41")
+        environment("DOCKER_API_VERSION", System.getenv("DOCKER_API_VERSION") ?: "1.44")
         environment("TESTCONTAINERS_RYUK_DISABLED", System.getenv("TESTCONTAINERS_RYUK_DISABLED") ?: "true")
     }
 
