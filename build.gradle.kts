@@ -97,14 +97,20 @@ subprojects {
         useJUnitPlatform {
             includeTags("integration")
         }
-        // Explicitly propagate Docker socket env vars to the forked test JVM.
-        // Testcontainers (used by identity-service and dashboard-service) needs to
-        // reach the Docker daemon. Gradle daemons are long-lived and may have been
-        // started before Jenkins set these variables, so hardcoding them here ensures
-        // the test fork always has them regardless of daemon lifecycle.
-        // In WSL2 + Docker Desktop the socket is at /var/run/docker.sock and is
-        // bind-mounted into the Jenkins container via docker-compose.
+        // Explicitly propagate Docker env vars to the forked test JVM.
+        // Testcontainers (identity-service, dashboard-service) needs the Docker daemon.
+        // Gradle daemons are long-lived and may predate the Jenkins environment block,
+        // so we hardcode values here to guarantee the test fork always has them.
+        //
+        // DOCKER_HOST  — points Testcontainers' EnvironmentAndSystemPropertyClientProviderStrategy
+        //                at the WSL2 socket mounted into the Jenkins container.
+        // DOCKER_API_VERSION — pins the docker-java API version so it skips the
+        //                negotiation handshake that can fail against newer Docker Desktop
+        //                daemons (Engine 25+). 1.41 is supported by all Engine 20.10+.
+        // TESTCONTAINERS_RYUK_DISABLED — Ryuk needs to bind-mount the socket itself,
+        //                which requires extra privileges; disabling avoids the error.
         environment("DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock")
+        environment("DOCKER_API_VERSION", System.getenv("DOCKER_API_VERSION") ?: "1.41")
         environment("TESTCONTAINERS_RYUK_DISABLED", System.getenv("TESTCONTAINERS_RYUK_DISABLED") ?: "true")
     }
 

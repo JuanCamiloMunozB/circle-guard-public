@@ -73,6 +73,24 @@ pipeline {
             }
         }
 
+        stage('Docker Diagnostics') {
+            // Runs BEFORE integration tests so we can see exactly what the Jenkins
+            // container sees. Output is visible in the build console log.
+            steps {
+                sh '''
+                    echo "=== whoami / groups ==="
+                    id
+                    echo "=== Docker socket stat ==="
+                    stat /var/run/docker.sock 2>&1 || echo "stat failed"
+                    ls -la /var/run/docker.sock 2>&1 || echo "ls failed"
+                    echo "=== docker version ==="
+                    docker version 2>&1 || echo "docker version failed"
+                    echo "=== docker info (first 10 lines) ==="
+                    docker info 2>&1 | head -10 || echo "docker info failed"
+                '''
+            }
+        }
+
         stage('Integration Tests') {
             steps {
                 sh './gradlew :services:circleguard-form-service:integrationTest \
