@@ -34,8 +34,8 @@ y un email a developers + culprits.
 
 | Canal | Plugin Jenkins | Credencial | Trigger |
 |---|---|---|---|
-| Slack | `slack` (Slack Notification) | `slack-webhook` (string credential con `${SLACK_WEBHOOK_URL}`) | `post.failure` + `post.success` en los 3 Jenkinsfiles |
-| Email | `email-ext` + `mailer` | Configuración SMTP del controlador (env vars `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`) | `post.failure` recipientProviders: `developers() + culprits()` |
+| Slack | `slack` (Slack Notification), modo Incoming Webhook | `slack-webhook` (string credential con `${SLACK_WEBHOOK_TOKEN}`, el tramo tras `hooks.slack.com/services/`; `slackNotifier.baseUrl` aporta el prefijo) | `post.failure` + `post.success` en los 3 Jenkinsfiles |
+| Email | `email-ext` (`unclassified.email-ext.mailAccount`) + `mailer` | SMTP Gmail vía credencial `smtp-credentials` (`${SMTP_USERNAME}`/`${SMTP_PASSWORD}` = dirección Gmail + App Password) | `post.failure` recipientProviders: `developers() + culprits()` |
 
 El mensaje incluye job, número de build, rama y enlace a la consola
 (`${env.BUILD_URL}console`) — cumple el requisito de PLAN §8.6.
@@ -45,8 +45,10 @@ El mensaje incluye job, número de build, rama y enlace a la consola
 ```bash
 export SONAR_HOST_URL=http://sonarqube:9000   # o la URL pública del server
 export SONAR_TOKEN=<token-de-usuario-sonarqube>
-export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../...
-export SLACK_TEAM_DOMAIN=<workspace>          # subdominio antes de .slack.com
+export SLACK_WEBHOOK_TOKEN=T.../B.../...       # SOLO el tramo tras hooks.slack.com/services/
+export SMTP_HOST=smtp.gmail.com                # Gmail SMTP
+export SMTP_USERNAME=<dirección-gmail>
+export SMTP_PASSWORD=<google-app-password>     # App Password, no la contraseña normal
 export GITHUB_PAT=<personal-access-token>     # solo necesario para bump-and-tag --push
 ```
 
@@ -71,7 +73,7 @@ contra targets reales (no mocks):
 |---|---|---|
 | 3 | Log de pipeline detenido por SonarQube quality gate fallido | Jenkins corriendo + SonarQube alcanzable + un cambio que viole el gate |
 | 5 | ZAP baseline real contra `circleguard-stage` en AKS | AKS-stage encendido + 8 servicios desplegados (depende a su vez de imágenes ARM64 publicadas) |
-| 7 | Mensaje Slack recibido en `#ci-alerts` ante fallo provocado | `SLACK_WEBHOOK_URL` real + Jenkins corriendo + un `error('forced')` temporal en una stage |
+| 7 | Mensaje Slack recibido en `#ci-alerts` ante fallo provocado | `SLACK_WEBHOOK_TOKEN` real + Jenkins corriendo + un `error('forced')` temporal en una stage |
 
 Estas tres evidencias se entregan en una sesión separada cuando los recursos estén
 disponibles, exactamente igual que los split 5b y los entregables `Ready` de 4b.

@@ -96,8 +96,18 @@ credentials:
           - string:
               scope: GLOBAL
               id: "slack-webhook"
-              description: "Slack Incoming Webhook URL for #ci-alerts."
-              secret: "${SLACK_WEBHOOK_URL}"
+              # The Slack plugin builds the full webhook URL as
+              # slackNotifier.baseUrl + this token. So this holds ONLY the path
+              # after hooks.slack.com/services/  (e.g. T00000000/B00000000/xxxxxxxx),
+              # NOT the full URL.
+              description: "Slack Incoming Webhook token path (the part after hooks.slack.com/services/)."
+              secret: "${SLACK_WEBHOOK_TOKEN}"
+          - usernamePassword:
+              scope: GLOBAL
+              id: "smtp-credentials"
+              description: "SMTP auth for failure-notification emails: Gmail address + Google App Password."
+              username: "${SMTP_USERNAME}"
+              password: "${SMTP_PASSWORD}"
           - string:
               scope: GLOBAL
               id: "github-pat"
@@ -116,22 +126,40 @@ unclassified:
           skipScmCause: false
           skipUpstreamCause: false
   slackNotifier:
-    teamDomain: "${SLACK_TEAM_DOMAIN}"
+    # Incoming Webhook mode: the plugin POSTs to baseUrl + the slack-webhook
+    # credential (the token path). teamDomain/botUser are not used for webhooks.
+    # The target channel is fixed when the webhook is created in Slack; the
+    # `channel`/`room` values are informational only in this mode.
+    baseUrl: "https://hooks.slack.com/services/"
     tokenCredentialId: "slack-webhook"
     botUser: false
     room: "#ci-alerts"
   mailer:
-    # Outlook SMTP. Requires an App Password if MFA is enabled on the account:
-    # account.microsoft.com → Security → Advanced security → App passwords
-    smtpHost: "${SMTP_HOST:-smtp.office365.com}"
+    # Gmail SMTP. Requires a Google App Password (Google Account → Security →
+    # 2-Step Verification → App passwords); the normal account password is rejected.
+    smtpHost: "${SMTP_HOST:-smtp.gmail.com}"
     smtpPort: "${SMTP_PORT:-587}"
     useSsl: false
     useTls: true
     charset: UTF-8
-    replyToAddress: "${SMTP_FROM:-Juancamuba@outlook.com}"
+    replyToAddress: "${SMTP_FROM:-juancamuba.swe@gmail.com}"
     authentication:
       username: "${SMTP_USERNAME:-}"
       password: "${SMTP_PASSWORD:-}"
+  # Email Extension plugin (emailext step) keeps its OWN SMTP config, separate
+  # from the mailer plugin above. Without this block emailext has no SMTP server
+  # and silently fails to send. Auth uses the smtp-credentials usernamePassword.
+  email-ext:
+    charset: "UTF-8"
+    defaultContentType: "text/plain"
+    defaultSuffix: "@gmail.com"
+    adminRequiredForTemplateTesting: false
+    mailAccount:
+      smtpHost: "${SMTP_HOST:-smtp.gmail.com}"
+      smtpPort: "${SMTP_PORT:-587}"
+      useSsl: false
+      useTls: true
+      credentialsId: "smtp-credentials"
 
 jobs:
   - script: |
