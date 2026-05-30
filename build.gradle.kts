@@ -116,12 +116,14 @@ subprojects {
         environment("DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock")
         environment("DOCKER_API_VERSION", System.getenv("DOCKER_API_VERSION") ?: "1.44")
         environment("TESTCONTAINERS_RYUK_DISABLED", System.getenv("TESTCONTAINERS_RYUK_DISABLED") ?: "true")
-        // Also pass DOCKER_API_VERSION as a JVM system property (-D flag).
-        // DefaultDockerClientConfig.createDefaultConfigBuilder() in docker-java 3.x merges
-        // System.getProperties() first, then overlays System.getenv(). Passing it both ways
-        // ensures the value is visible regardless of which internal path each Testcontainers
-        // provider strategy uses when constructing its DockerClientConfig.
-        systemProperty("DOCKER_API_VERSION", System.getenv("DOCKER_API_VERSION") ?: "1.44")
+        // Also pin the API version via docker-java's JVM system property. The correct
+        // property key is "api.version" (DefaultDockerClientConfig.API_VERSION) — NOT
+        // "DOCKER_API_VERSION", which is only the *environment* variable name. docker-java's
+        // createDefaultConfigBuilder() seeds its Properties from System.getProperties() using
+        // the "api.version" key; without a resolved version it falls back to API 1.32, which
+        // Docker Engine 29.x rejects (HTTP 400, "client version ... too old"). Setting the
+        // correct key forces the strategy-detection ping onto /v1.44.
+        systemProperty("api.version", System.getenv("DOCKER_API_VERSION") ?: "1.44")
     }
 
     // --- JaCoCo coverage report ---

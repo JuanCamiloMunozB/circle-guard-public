@@ -62,6 +62,11 @@ class IdentityVaultPostgresIntegrationTest {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        // The shared test application.yml pins H2 (driver + dialect) for the unit
+        // slice tests. Override both here so Hikari and Hibernate target the real
+        // PostgreSQL container instead of trying to drive a postgres URL with H2.
+        registry.add("spring.datasource.driver-class-name", POSTGRES::getDriverClassName);
+        registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
     }
 
     @MockBean

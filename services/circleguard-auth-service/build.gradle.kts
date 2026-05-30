@@ -28,7 +28,6 @@ dependencies {
     // Testcontainers MockServer container for the auth -> identity REST integration test.
     // Spins up a real Docker container that emulates identity-service's /api/v1/identities/map
     // endpoint, so the IdentityClient is exercised against a real HTTP server (not a Mockito stub).
-    testImplementation(platform("org.testcontainers:testcontainers-bom:1.19.7"))
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:mockserver")
