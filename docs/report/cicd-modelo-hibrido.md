@@ -14,9 +14,9 @@
 ## Por qué Kaniko (no `docker build`)
 
 1. **Sin demonio Docker** ⇒ funciona dentro de un pod no privilegiado en AKS (no requiere `dockerd` corriendo).
-2. **Sin capas locales acumuladas** ⇒ cumple CLAUDE.md §3 (no saturar disco del workstation).
+2. **Sin capas locales acumuladas** ⇒ no satura el disco del workstation.
 3. **Reproducible** ⇒ mismo binario corre en agente local y en pod AKS; la única diferencia es el wrapper (`docker run` vs invocación directa `/kaniko/executor`).
-4. **Single-platform por invocación**: aceptamos arm64-only (CLAUDE.md §4 lo permite) en lugar de multi-arch porque los nodos AKS son ARM64; un solo `--customPlatform=linux/arm64` basta.
+4. **Single-platform por invocación**: aceptamos arm64-only en lugar de multi-arch porque los nodos AKS son ARM64; un solo `--customPlatform=linux/arm64` basta.
 
 ## Anatomía del Pod Template
 
@@ -47,7 +47,7 @@ Checkout
 post.always: cleanWs + docker system prune
 ```
 
-Cumple CLAUDE.md §5.1 / §5.4: dev NUNCA enciende AKS. Las stages Deploy/Rollout/Smoke
+Por política de costos, dev NUNCA enciende AKS. Las stages Deploy/Rollout/Smoke
 existen para validar el ciclo completo cuando hay un cluster disponible (kind local,
 o AKS-dev en una sesión deliberada), pero no son justificación para encender AKS.
 
@@ -94,7 +94,7 @@ también gitignored.
 ## RBAC
 
 Reusa lo existente en `jenkins/config/jenkins-account.yaml` (ServiceAccount `jenkins` +
-Role por namespace + ClusterRole acotado, ver CLAUDE.md §9.7). El pod efímero corre
+Role por namespace + ClusterRole acotado). El pod efímero corre
 como `jenkins`, así que su Role determina qué puede tocar `kubectl`:
 
 - Namespaces `circleguard-dev|stage|master`: pods, services, configmaps, secrets, deployments, exec, log, port-forward.

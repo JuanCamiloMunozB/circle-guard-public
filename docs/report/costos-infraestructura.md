@@ -86,7 +86,7 @@ liberar todo: `terraform destroy`.
 > Actualizar esta tabla **cada** vez que se ejecute `az aks start/stop` o un `terraform
 > apply/destroy` en cualquier ambiente.
 
-## Reglas duras (CLAUDE.md §6)
+## Reglas duras
 
 1. AKS solo encendido cuando se esta usando activamente; apagar **inmediatamente** despues.
 2. Validar `powerState.code == "Stopped"` tras cada apagado.

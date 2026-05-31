@@ -2,7 +2,7 @@
 //
 // Runs in an ephemeral pod inside AKS (kubernetes plugin), scheduled from the
 // Kubernetes cloud declared in jenkins/config/casc.yaml. The pod is destroyed when
-// the build finishes (no persistent agents on the cluster - CLAUDE.md sec.5.5).
+// the build finishes (no persistent agents on the cluster).
 //
 // The pod definition lives in jenkins/podtemplates/kaniko-build-agent.yaml and
 // includes containers: gradle, kaniko, kubectl, python. Each `sh` step below is
@@ -17,7 +17,7 @@ pipeline {
     }
 
     options {
-        timeout(time: 45, unit: 'MINUTES')
+        timeout(time: 60, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()

@@ -1,7 +1,7 @@
 # Estrategia de Pruebas — CircleGuard
 
-> Estado: pasos 9.1, 9.2, 9.4 y 9.6 de PLAN_IMPLEMENTACION_V2.md ejecutados. Paso 9.3
-> (Locust contra AKS) pendiente de coordinación con Ops. Historia de Usuario: HU-09.
+> Estado: pruebas unitarias, de integración y E2E implementadas; Locust contra AKS
+> pendiente de coordinación con Ops. Historia de Usuario: HU-09.
 >
 > **Especificaciones detalladas de pruebas por servicio y tipo:**
 > - Unitarias: [`docs/report/tests/unit-tests.md`](../tests/unit-tests.md) (80+ tests PU-xxx)
@@ -295,7 +295,7 @@ no bloquear builds.
 
 ## 7. Anti-patrones evitados durante HU-09
 
-1. **`@Disabled` para forzar verde.** Prohibido por CLAUDE.md §8.6. Cada test
+1. **`@Disabled` para forzar verde.** Prohibido por la política de pruebas del proyecto. Cada test
    que falló durante la iteración se arregló (test mal escrito) o se eliminó
    por imposibilidad técnica documentada (`HealthStatsControllerTest` mockeaba
    mal la API fluida de `Neo4jClient` con `RETURNS_DEEP_STUBS`).
@@ -351,7 +351,7 @@ bash jenkins/scripts/run-locust.sh \
 ## 9. Integración con CI/CD
 
 Lo que cada pipeline de Jenkins (definido en `jenkins/Jenkinsfile.dev|stage|master`)
-debe ejecutar — alineado con CLAUDE.md §9.2:
+debe ejecutar:
 
 | Etapa Jenkins | Comando | Falla bloquea? |
 |---|---|:---:|

@@ -109,7 +109,7 @@ export K8S_API_CA_CERT=$(kubectl config view --raw -o jsonpath='{.clusters[0].cl
 
 (El SA token sigue gestionado por `setup-k8s-jenkins.sh`.)
 
-## Reglas duras (CLAUDE.md)
+## Reglas duras
 
 1. **dev no enciende AKS** (sec.5.1, sec.5.4). Si lo necesitas para depurar Deploy/Rollout,
    pásale `SKIP_DEPLOY=true` o apunta `K8S_API_SERVER` a un kind.

@@ -68,8 +68,8 @@ note bottom of aks
 end note
 
 note right of dockerhub
-  Solo arm64-only (CLAUDE.md sec.4
-  permite "multi-arch o arm64-only";
+  Solo arm64-only (la politica del
+  proyecto permite multi-arch o arm64-only;
   Kaniko es single-platform por
   invocacion, asi que elegimos arm64
   para que rinda en los nodos AKS).

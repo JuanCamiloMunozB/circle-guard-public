@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bootstrap script: build the Jenkins controller image and push to Docker Hub.
 # Run ONCE before deploying Jenkins to AKS.
-# Uses `docker buildx --push` so no layers accumulate locally (CLAUDE.md §3).
+# Uses `docker buildx --push` so no layers accumulate locally.
 #
 # Usage:
 #   bash jenkins/scripts/build-push-controller.sh [tag]

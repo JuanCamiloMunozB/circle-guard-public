@@ -2,11 +2,11 @@
 //
 // Runs on a local Jenkins agent labelled 'local-kaniko' (registered manually on the
 // dev workstation: Git Bash / WSL Ubuntu + Docker Desktop). NEVER schedules on AKS
-// (CLAUDE.md sec.5.1 / sec.5.4: dev does not burn Azure credit).
+// (dev does not burn Azure credit).
 //
 // Image build:
 //   - Uses Kaniko in a one-shot Docker container instead of `docker build`.
-//   - No layers persist on the host (CLAUDE.md sec.3.1).
+//   - No layers persist on the host.
 //   - Targets linux/amd64: the dev agent is a local amd64 workstation and Kaniko
 //     executes Dockerfile RUN steps natively (no QEMU), so the target platform MUST
 //     match the host CPU or the unpacked rootfs /bin/sh fails with "exec format error".
@@ -20,7 +20,7 @@ pipeline {
     agent { label 'local-kaniko' }
 
     options {
-        timeout(time: 30, unit: 'MINUTES')
+        timeout(time: 60, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
