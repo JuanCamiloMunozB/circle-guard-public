@@ -1,0 +1,122 @@
+# kube-prometheus-stack Helm values for CircleGuard
+# Chart: prometheus-community/kube-prometheus-stack
+# ARM64-compatible (all images are multi-arch since chart v45+)
+#
+# Install:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace \
+#     -f monitoring/helm/values-kube-prometheus-stack.yaml
+
+grafana:
+  enabled: true
+  adminPassword: "circleguard-grafana-admin"
+  service:
+    type: NodePort
+    nodePort: 32000
+  persistence:
+    enabled: false
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: monitoring
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://prometheus-kube-prometheus-prometheus:9090
+          isDefault: true
+        - name: Loki
+          type: loki
+          url: http://loki:3100
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: circleguard
+          orgId: 1
+          folder: CircleGuard
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/circleguard
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    storageSpec: {}
+    # Scrape pods annotated with prometheus.io/scrape="true"
+    additionalScrapeConfigs:
+      - job_name: circleguard-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - circleguard-dev
+                - circleguard-stage
+                - circleguard-master
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: replace
+            target_label: app
+    # Pick up PrometheusRule CRDs from all namespaces
+    ruleNamespaceSelector: {}
+    ruleSelector: {}
+
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: [alertname, app]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: "null"
+      routes:
+        - matchers:
+            - alertname =~ "CircleGuard.*"
+          receiver: "null"
+    receivers:
+      - name: "null"
+
+# Disable components not needed for demo to save resources
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+coreDns:
+  enabled: false

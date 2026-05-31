@@ -1,0 +1,79 @@
+# Loki Stack Helm values for CircleGuard
+# Chart: grafana/loki-stack  (Loki + Promtail)
+# Chosen over ELK: ARM64-native, 10x less RAM, integrates with existing Grafana.
+#
+# Install:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install loki grafana/loki-stack \
+#     -n monitoring --create-namespace \
+#     -f monitoring/helm/values-loki-stack.yaml
+
+loki:
+  enabled: true
+  persistence:
+    enabled: false
+  config:
+    auth_enabled: false
+    ingester:
+      chunk_idle_period: 3m
+      chunk_block_size: 262144
+      chunk_retain_period: 1m
+    schema_config:
+      configs:
+        - from: "2024-01-01"
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /data/loki/boltdb-shipper-active
+        cache_location: /data/loki/boltdb-shipper-cache
+        shared_store: filesystem
+      filesystem:
+        directory: /data/loki/chunks
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+    chunk_store_config:
+      max_look_back_period: 0s
+
+promtail:
+  enabled: true
+  config:
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: circleguard-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - circleguard-dev
+                - circleguard-stage
+                - circleguard-master
+        pipeline_stages:
+          - docker: {}
+          - multiline:
+              firstline: '^\d{4}-\d{2}-\d{2}'
+              max_wait_time: 3s
+          - regex:
+              expression: '(?P<level>INFO|WARN|ERROR|DEBUG|TRACE)'
+          - labels:
+              level:
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+
+grafana:
+  enabled: false  # reuse the one from kube-prometheus-stack
