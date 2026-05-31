@@ -1,0 +1,93 @@
+# ConfigMap that ships the Grafana dashboard into the monitoring namespace.
+# The Grafana sidecar (label grafana_dashboard=1) picks it up automatically.
+# Generated from monitoring/dashboards/circleguard-overview.json — keep in sync.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: circleguard-overview-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  circleguard-overview.json: |-
+    {
+      "title": "CircleGuard — Services Overview",
+      "uid": "circleguard-overview",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "tags": ["circleguard", "microservices"],
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate (req/s)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+          "targets": [{
+            "expr": "sum by (app) (rate(http_server_requests_seconds_count{app=~\".*-service\"}[2m]))",
+            "legendFormat": "{{app}}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "id": 2,
+          "title": "5xx Error Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+          "targets": [{
+            "expr": "sum by (app) (rate(http_server_requests_seconds_count{status=~\"5..\",app=~\".*-service\"}[2m])) / sum by (app) (rate(http_server_requests_seconds_count{app=~\".*-service\"}[2m]))",
+            "legendFormat": "{{app}}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "percentunit" } }
+        },
+        {
+          "id": 3,
+          "title": "HTTP Latency P50 / P99",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (app, le) (rate(http_server_requests_seconds_bucket{app=~\".*-service\"}[5m])))",
+              "legendFormat": "p99 {{app}}"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum by (app, le) (rate(http_server_requests_seconds_bucket{app=~\".*-service\"}[5m])))",
+              "legendFormat": "p50 {{app}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 4,
+          "title": "JVM Heap Memory",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+          "targets": [{
+            "expr": "sum by (app) (jvm_memory_used_bytes{area=\"heap\",app=~\".*-service\"})",
+            "legendFormat": "{{app}}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "bytes" } }
+        },
+        {
+          "id": 5,
+          "title": "CPU Usage",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+          "targets": [{
+            "expr": "process_cpu_usage{app=~\".*-service\"}",
+            "legendFormat": "{{app}}"
+          }],
+          "fieldConfig": { "defaults": { "unit": "percentunit" } }
+        },
+        {
+          "id": 6,
+          "title": "Circuit Breaker State",
+          "type": "stat",
+          "gridPos": { "h": 6, "w": 24, "x": 0, "y": 27 },
+          "targets": [{
+            "expr": "resilience4j_circuitbreaker_state{state=\"open\"}",
+            "legendFormat": "{{name}}"
+          }]
+        }
+      ]
+    }
