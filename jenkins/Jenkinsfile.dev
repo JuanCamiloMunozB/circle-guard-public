@@ -79,28 +79,6 @@ pipeline {
             }
         }
 
-        stage('Docker Diagnostics') {
-            // Runs BEFORE integration tests so we can see exactly what the Jenkins
-            // container sees. Output is visible in the build console log.
-            steps {
-                sh '''
-                    echo "=== whoami / groups ==="
-                    id
-                    echo "=== Docker env vars ==="
-                    echo "DOCKER_HOST=${DOCKER_HOST}"
-                    echo "DOCKER_API_VERSION=${DOCKER_API_VERSION}"
-                    echo "TESTCONTAINERS_RYUK_DISABLED=${TESTCONTAINERS_RYUK_DISABLED}"
-                    echo "=== Docker socket stat ==="
-                    stat /var/run/docker.sock 2>&1 || echo "stat failed"
-                    ls -la /var/run/docker.sock 2>&1 || echo "ls failed"
-                    echo "=== docker version ==="
-                    docker version 2>&1 || echo "docker version failed"
-                    echo "=== docker info (first 10 lines) ==="
-                    docker info 2>&1 | head -10 || echo "docker info failed"
-                '''
-            }
-        }
-
         stage('Integration Tests') {
             steps {
                 // --no-daemon: forked test JVMs are children of the current shell process
@@ -128,10 +106,18 @@ pipeline {
             steps {
                 // withSonarQubeEnv injects SONAR_HOST_URL + SONAR_AUTH_TOKEN; the
                 // gradle plugin (id 'org.sonarqube' in root build.gradle.kts) picks them
-                // up automatically. Coverage XML produced by JaCoCo in the test stage
-                // is referenced via sonar.coverage.jacoco.xmlReportPaths.
+                // up automatically.
+                //
+                // The org.sonarqube 5.x plugin does NOT add a task dependency on
+                // compilation, so running `sonar` alone leaves sonar.java.binaries empty
+                // and analysis aborts with "please provide compiled classes". We therefore
+                // run the main `classes` compilation and `jacocoTestReport` (which produces
+                // the coverage XML referenced by sonar.coverage.jacoco.xmlReportPaths) in
+                // the same invocation, before `sonar`. The unit/integration test tasks ran
+                // in earlier stages within this same workspace, so their exec data is reused
+                // and the test tasks are UP-TO-DATE here.
                 withSonarQubeEnv('sonarqube') {
-                    sh './gradlew sonar -Dsonar.qualitygate.wait=true --info'
+                    sh './gradlew classes jacocoTestReport sonar -Dsonar.qualitygate.wait=true --info'
                 }
             }
         }
