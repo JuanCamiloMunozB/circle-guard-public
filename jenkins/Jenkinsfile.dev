@@ -7,7 +7,11 @@
 // Image build:
 //   - Uses Kaniko in a one-shot Docker container instead of `docker build`.
 //   - No layers persist on the host (CLAUDE.md sec.3.1).
-//   - Targets arm64 only because the AKS nodes are ARM64 (Standard_B*pls_v2).
+//   - Targets linux/amd64: the dev agent is a local amd64 workstation and Kaniko
+//     executes Dockerfile RUN steps natively (no QEMU), so the target platform MUST
+//     match the host CPU or the unpacked rootfs /bin/sh fails with "exec format error".
+//     The arm64 images consumed by AKS (Standard_B*pls_v2) are produced by the stage
+//     and master pipelines, which build natively inside arm64 AKS pods.
 //
 // Deploy/Rollout/Smoke stages are kept and target whatever `K8S_API_SERVER` resolves
 // to: a local kind cluster for purely-local validation, or AKS-dev only when it is
@@ -31,7 +35,7 @@ pipeline {
         REGISTRY        = 'docker.io/circleguard'
         K8S_NAMESPACE   = 'circleguard-dev'
         KANIKO_IMAGE    = 'gcr.io/kaniko-project/executor:debug'
-        TARGET_PLATFORM = 'linux/arm64'
+        TARGET_PLATFORM = 'linux/amd64'
         // Testcontainers (PostgreSQL + MockServer containers used in integration tests)
         // requires the Docker socket. Docker Desktop exposes it at /var/run/docker.sock
         // inside any WSL2 distro where WSL Integration is enabled:
