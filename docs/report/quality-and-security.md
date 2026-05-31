@@ -3,11 +3,14 @@
 > Política de quality gates y escaneo de seguridad en los pipelines Jenkins.
 > Estado tras HU-08 Fase 8a: configuración completa, evidencia local; verificación
 > end-to-end con Jenkins corriendo + SonarQube/Slack reales se cierra en Fase 8b.
+> El Quality Gate de SonarCloud quedó en GREEN tras remediar las causas raíz de calidad
+> y seguridad (ver «Remediación del Quality Gate»).
 
 ## Capas de gate (todas bloqueantes)
 
 | # | Gate | Herramienta | Ubicación en el pipeline | Criterio de fallo |
 |---|---|---|---|---|
+| 0 | Dependency verification (cadena de suministro) | Gradle dependency-verification (`gradle/verification-metadata.xml`) | Resolución de dependencias, antes de compilar | El SHA-256 de cualquier artefacto descargado no coincide con el hash fijado → Gradle aborta el build |
 | 1 | Unit + Integration tests | JUnit5 + Testcontainers | Antes de Sonar | Cualquier test falla |
 | 2 | Code coverage | JaCoCo 0.8.11 | Reporte agregado por `jacocoTestReport` | <80% línea (regla `jacocoTestCoverageVerification`, ya configurada pero NO atada a `check` aún) |
 | 3 | Static analysis + coverage | SonarQube (`org.sonarqube` plugin + `withSonarQubeEnv` + `waitForQualityGate`) | Después de Integration, antes de Build JARs | Quality gate del server falla. `abortPipeline: true` corta el build |
@@ -66,6 +69,37 @@ contra targets reales (no mocks):
 | ZAP: baseline smoke | `tests/security/reports/zap-report.html` + `.json` + `-warnings.md` | Reporte real generado por ZAP | Target `https://httpbin.org` como demo del flujo. Target real (stage en AKS) se valida en 8b |
 | Semver tag | `git tag` muestra `v0.1.0` | Tag anotado real con mensaje | Computado por `bump-and-tag.sh` desde Conventional Commits del repo |
 | bump-and-tag dry-run | log de ejecución | `last tag: v0.0.0 -> bump: minor -> new tag: v0.1.0` | Demuestra que la lógica funciona contra los commits reales del repo |
+
+## Remediación del Quality Gate (SonarCloud)
+
+El gate de SonarCloud (`org.sonarqube`, proyecto `JuanCamiloMunozB_circle-guard-public`,
+evaluado sobre **código nuevo**) estaba en **FAILED**. Se corrigió atacando las causas raíz
+—sin desactivar el gate, bajar umbrales, añadir exclusiones para ocultar código ni marcar
+won't-fix para esquivar la regla (PLAN §7.7 y §8)—. Categorías corregidas:
+
+| Categoría | Reglas Sonar | Acción aplicada |
+|---|---|---|
+| Bugs de fiabilidad | S2229, S2119 | Corrección directa en el servicio afectado |
+| Path traversal | S2083, S5443 | Saneo y validación de rutas en `StorageService` y `FileStorageService` |
+| Mass assignment | S4684 (x3) | Request bodies vinculados a DTOs dedicados (`HealthSurveyRequest`, `QuestionnaireRequest`, `SystemSettingsRequest`) en vez de entidades persistentes |
+| Inyección | S5145, S7044 | Validación/escape de identificadores en `MacSessionRegistry` y `CircleService` |
+| ReDoS / CORS | S5852, S5122 | Parseo de orígenes CORS por coma literal (sin regex con backtracking) en los `WebCorsConfig` de dashboard/file/form, orígenes externalizados |
+| CSRF (security hotspots) | S4502 | Revisados y marcados SAFE: API REST stateless (`SessionCreationPolicy.STATELESS` + JWT bearer, sin cookie de sesión) → sin superficie de ataque CSRF |
+| Manejo de errores | — | `LoginController` devuelve 401/500 correctos ante fallo de autenticación / error inesperado |
+
+Se añadieron pruebas unitarias para cubrir las rutas tocadas (`LoginControllerTest`,
+`StorageServiceTest`, `FileStorageServiceTest`, `PromotionClientTest`,
+`QuestionnaireControllerTest`, `HealthStatusServiceTest`, `MacSessionRegistryTest`).
+
+> **Nota JaCoCo:** la cobertura de código nuevo debe medirse con la suite **completa**
+> (`./gradlew cleanTest test sonar`). Una corrida filtrada (`--tests`) deja datos de
+> cobertura parciales que `sonar` interpreta como clases al 0%, hundiendo `new_coverage`
+> de forma artificial.
+
+**Resultado tras la remediación:** Quality Gate **GREEN** — cobertura de código nuevo por
+encima del umbral del 80% (~90% medido en la corrida de remediación), 0 bugs y 0
+vulnerabilidades en código nuevo, 100% de security hotspots revisados, y ratings de
+fiabilidad/seguridad/mantenibilidad en **A**.
 
 ## Lo que queda para Fase 8b (Jenkins + AKS + webhooks)
 
