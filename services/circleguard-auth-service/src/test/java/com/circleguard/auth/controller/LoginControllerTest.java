@@ -12,6 +12,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.test.web.servlet.MockMvc;
@@ -88,5 +89,43 @@ public class LoginControllerTest {
 
         Mockito.verify(jwtService, Mockito.never())
                 .generateToken(Mockito.any(UUID.class), Mockito.any(Authentication.class));
+    }
+
+    /**
+     * Bad credentials must surface as 401 without leaking which factor failed.
+     * Exercises the AuthenticationException catch branch.
+     */
+    @Test
+    void shouldReturn401WhenAuthenticationFails() throws Exception {
+        Mockito.when(authManager.authenticate(Mockito.any(UsernamePasswordAuthenticationToken.class)))
+                .thenThrow(new BadCredentialsException("bad credentials"));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\": \"testuser\", \"password\": \"wrong\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("Invalid username or password"));
+
+        Mockito.verify(jwtService, Mockito.never())
+                .generateToken(Mockito.any(UUID.class), Mockito.any(Authentication.class));
+    }
+
+    /**
+     * Any unexpected failure (e.g. identity lookup blowing up) must degrade to a
+     * generic 500 without exposing internals. Exercises the Exception catch branch.
+     */
+    @Test
+    void shouldReturn500OnUnexpectedError() throws Exception {
+        Authentication auth = Mockito.mock(Authentication.class);
+        Mockito.when(authManager.authenticate(Mockito.any(UsernamePasswordAuthenticationToken.class)))
+                .thenReturn(auth);
+        Mockito.when(identityClient.getAnonymousId(Mockito.anyString()))
+                .thenThrow(new RuntimeException("boom"));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\": \"testuser\", \"password\": \"password123\"}"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.message").value("Internal server error"));
     }
 }
