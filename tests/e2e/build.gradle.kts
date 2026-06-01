@@ -3,7 +3,7 @@ plugins {
 }
 
 dependencies {
-    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.4.13"))
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.rest-assured:rest-assured:5.4.0")
     testImplementation("io.rest-assured:json-path:5.4.0")
