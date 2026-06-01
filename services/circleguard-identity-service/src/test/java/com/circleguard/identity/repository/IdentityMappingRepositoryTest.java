@@ -8,7 +8,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,9 +21,11 @@ class IdentityMappingRepositoryTest {
 
     @Test
     void shouldSaveAndRetrieveWithAutomaticEncryption() {
+        // anonymousId is assigned by Hibernate (@GeneratedValue UUID); leaving it null
+        // keeps the entity "new" so save() issues an INSERT (matches production usage in
+        // IdentityVaultService.getOrCreateAnonymousId).
         IdentityMapping mapping = IdentityMapping.builder()
                 .realIdentity("test-user")
-                .anonymousId(UUID.randomUUID())
                 .identityHash("hash123")
                 .salt("salt123")
                 .build();
@@ -48,7 +49,6 @@ class IdentityMappingRepositoryTest {
         
         IdentityMapping mapping = IdentityMapping.builder()
                 .realIdentity(realIdentity)
-                .anonymousId(UUID.randomUUID())
                 .identityHash(hash)
                 .salt(salt)
                 .build();

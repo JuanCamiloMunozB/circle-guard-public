@@ -60,6 +60,14 @@ tests/performance/reports/
 tests/performance/locust-report-*.html
 tests/performance/locust-*.csv
 
+# Pipeline security scanner outputs (transient; permanent evidence lives in docs/report/security/)
+tests/security/reports/
+
+# Runtime file-upload storage (form-service `form.storage.root` and file-service
+# `file.storage.root`, both default to `uploads/`). Created at runtime/test; never versioned.
+uploads/
+**/uploads/
+
 # Generated kubeconfig for the Jenkins container (created by setup-kubeconfig.ps1)
 jenkins/config/.kubeconfig-incontainer
 
@@ -68,9 +76,15 @@ jenkins/config/.kubeconfig-incontainer
 k8s/jenkins/dockerhub-secret.yaml
 jenkins/config/.dockerconfig.json
 
+# Jenkins AKS credentials Secret (only the .example is versioned)
+k8s/jenkins/jenkins-secret.yaml
+
 CLAUDE.md
 PLAN_IMPLEMENTACION_V2.md
 GUIA_DECISIONES_ARQUITECTONICAS.md
+Handoff.md
+ONBOARDING.md
+RUNBOOK_PIPELINES.md
 
 # Terraform
 **/.terraform/

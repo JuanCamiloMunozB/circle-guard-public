@@ -96,6 +96,12 @@ class HealthStatusServiceTest {
         // Mock Redis
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
+        // updateStatus is annotated @CacheEvict(cacheNames = "userStatus"); the
+        // cache interceptor resolves the named cache through the CacheManager, so
+        // the mock must return a real cache instance instead of null.
+        when(cacheManager.getCache("userStatus"))
+                .thenReturn(new org.springframework.cache.concurrent.ConcurrentMapCache("userStatus"));
+
         assertDoesNotThrow(() -> healthStatusService.updateStatus(anonymousId, status));
         
 

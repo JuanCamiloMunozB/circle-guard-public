@@ -31,6 +31,8 @@ public class HealthStatusService {
      * Updates a user's health status and triggers recursive fencing if required.
      * Consolidated into a single transaction with optimized Cypher to meet NFR-1 (<1s target).
      */
+    @Transactional("neo4jTransactionManager")
+    @CacheEvict(cacheNames = "userStatus", allEntries = true)
     public void updateStatus(String anonymousId, String status) {
         updateStatus(anonymousId, status, false);
     }
@@ -179,6 +181,7 @@ public class HealthStatusService {
      * Resolves a user's status to ACTIVE and re-evaluates downstream contacts.
      * Implements the "Pulse Recovery" algorithm for Story 4.4.
      */
+    @Transactional("neo4jTransactionManager")
     public void resolveStatus(String anonymousId) {
         resolveStatus(anonymousId, false);
     }

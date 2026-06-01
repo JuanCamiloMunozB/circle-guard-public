@@ -6,8 +6,8 @@ plugins {
 }
 
 dependencies {
-    implementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
-    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
 
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-data-redis")
@@ -16,7 +16,6 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.11.5")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 
-    testImplementation(platform("org.testcontainers:testcontainers-bom:1.19.7"))
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.testcontainers:junit-jupiter")
 }

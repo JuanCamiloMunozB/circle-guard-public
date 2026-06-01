@@ -1,5 +1,6 @@
 package com.circleguard.promotion.controller;
 
+import com.circleguard.promotion.dto.SystemSettingsRequest;
 import com.circleguard.promotion.model.jpa.SystemSettings;
 import com.circleguard.promotion.repository.jpa.SystemSettingsRepository;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +26,7 @@ public class AdminController {
 
     @PostMapping
     @org.springframework.cache.annotation.CacheEvict(value = "systemSettings", allEntries = true)
-    public ResponseEntity<SystemSettings> updateSettings(@RequestBody SystemSettings newSettings) {
+    public ResponseEntity<SystemSettings> updateSettings(@RequestBody SystemSettingsRequest newSettings) {
         log.info("Updating system settings: {}", newSettings);
         
         SystemSettings settings = settingsRepository.getSettings()

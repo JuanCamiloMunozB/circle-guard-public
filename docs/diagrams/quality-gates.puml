@@ -1,0 +1,69 @@
+@startuml CircleGuard - Quality gates en el pipeline (HU-08)
+
+skinparam backgroundColor #FAFAFA
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #555555
+  RoundCorner 8
+}
+skinparam ArrowColor #444444
+skinparam DefaultFontName "Segoe UI"
+title CircleGuard - Cadena de gates bloqueantes por pipeline (HU-08)
+
+actor Dev as dev
+actor Ops as ops
+
+rectangle "Jenkinsfile.dev / stage / master" as pipeline {
+  rectangle "1. Unit + Integration tests\n(JUnit5 + Testcontainers)" as t1
+  rectangle "2. JaCoCo coverage\n(0.8.11, gate >=80% linea)" as t2
+  rectangle "3. SonarQube\nwithSonarQubeEnv\n+ waitForQualityGate\nabortPipeline: true" as t3
+  rectangle "4. Build JARs\n(./gradlew bootJar)" as b1
+  rectangle "5. Kaniko build + push\n--customPlatform=linux/arm64" as b2
+  rectangle "6. Trivy image scan\n--severity CRITICAL,HIGH\n--exit-code 1" as s1
+  rectangle "7. Semver tag\n(solo master)\nbump-and-tag.sh + git push" as s2
+  rectangle "8. Manual approval\n(solo master)\ninput message" as s3
+  rectangle "9. Deploy a K8s\n(kubectl set image)" as d1
+  rectangle "10. E2E + Performance\nrun-e2e.sh / locust" as t4
+  rectangle "11. OWASP ZAP baseline\n(solo stage)\nfail en rule FAIL" as s4
+
+  t1 -down-> t2
+  t2 -down-> t3
+  t3 -down-> b1
+  b1 -down-> b2
+  b2 -down-> s1
+  s1 -down-> s2
+  s2 -down-> s3
+  s3 -down-> d1
+  d1 -down-> t4
+  t4 -down-> s4
+}
+
+rectangle "post { failure }\nslackSend(#ci-alerts)\n+ emailext(developers/culprits)" as notify_fail #FFE0E0
+rectangle "post { success }\nslackSend(#ci-alerts)" as notify_ok #E0FFE0
+
+t1 -right-> notify_fail : test fail
+t3 -right-> notify_fail : quality gate fail
+s1 -right-> notify_fail : CVE CRITICAL/HIGH
+s4 -right-> notify_fail : ZAP rule FAIL
+s4 -down-> notify_ok : pipeline ok
+
+dev -down-> pipeline : push a feature/*
+ops -right-> s3 : aprueba release vN.M.P
+
+note bottom of pipeline
+  Cada bloque bloqueante:
+  - Para dev:    1, 2, 3, 6                       (sin stages 7, 11)
+  - Para stage:  1, 2, 3, 6,           9, 10, 11  (sin 7, 8)
+  - Para master: 1, 2, 3, 6, 7, 8, 9, 10          (sin 11)
+end note
+
+note right of notify_fail
+  Mensaje incluye:
+  - job, build number, rama
+  - enlace a la consola
+  Plugin Slack ignora si el webhook
+  no esta configurado: dev local
+  funciona sin Slack arriba.
+end note
+
+@enduml

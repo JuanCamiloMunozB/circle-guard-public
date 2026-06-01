@@ -35,13 +35,35 @@ public class FileStorageService {
     }
 
     public String saveFile(MultipartFile file) {
-        String filename = UUID.randomUUID().toString() + "_" + file.getOriginalFilename();
+        String filename = UUID.randomUUID().toString() + "_" + sanitizeFilename(file.getOriginalFilename());
+        // Resolve and normalize, then verify the target stays inside the storage
+        // root. This neutralizes any path-traversal sequences in the user-supplied
+        // filename (e.g. "../../etc/passwd") before touching the filesystem.
+        Path target = this.root.resolve(filename).normalize();
+        if (!target.startsWith(this.root.normalize())) {
+            throw new IllegalArgumentException("Resolved file path escapes the storage root");
+        }
         try {
-            Files.copy(file.getInputStream(), this.root.resolve(filename));
+            Files.copy(file.getInputStream(), target);
             return filename;
         } catch (Exception e) {
             throw new RuntimeException("Could not store file", e);
         }
+    }
+
+    /**
+     * Reduces an untrusted client-supplied filename to a single safe path
+     * component: directory parts are dropped and only a conservative character
+     * set is kept, so the result can never alter the storage location.
+     */
+    private static String sanitizeFilename(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "file";
+        }
+        // Keep only the final path element, discarding any directory separators.
+        String baseName = Paths.get(originalFilename).getFileName().toString();
+        String safeName = baseName.replaceAll("[^A-Za-z0-9._-]", "_");
+        return safeName.isBlank() ? "file" : safeName;
     }
 
     public Resource loadFile(String filename) {

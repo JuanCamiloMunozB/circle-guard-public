@@ -11,7 +11,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/attachments")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class AttachmentController {
 
     private final StorageService storageService;

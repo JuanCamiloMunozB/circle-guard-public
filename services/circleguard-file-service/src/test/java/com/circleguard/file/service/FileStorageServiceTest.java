@@ -56,6 +56,20 @@ class FileStorageServiceTest {
     }
 
     @Test
+    void saveFile_defaultsToFileWhenOriginalFilenameIsMissing(@TempDir Path tmp) throws IOException {
+        FileStorageService svc = new FileStorageService(tmp);
+        // No original filename → sanitizeFilename must fall back to "file".
+        MockMultipartFile mpf = new MockMultipartFile(
+                "file", null, "application/octet-stream", "data".getBytes());
+
+        String name = svc.saveFile(mpf);
+
+        assertTrue(name.endsWith("_file"),
+                "missing filename must collapse to the safe default 'file'");
+        assertTrue(Files.exists(tmp.resolve(name)));
+    }
+
+    @Test
     void saveFile_wrapsIOExceptionInRuntimeException(@TempDir Path tmp) throws IOException {
         FileStorageService svc = new FileStorageService(tmp);
         MultipartFile broken = Mockito.mock(MultipartFile.class);
