@@ -65,6 +65,8 @@ subprojects {
     //   postgresql 42.7.11 -> fixes CVE-2026-42198 SCRAM client DoS.
     //   netty 4.1.133.Final -> fixes CVE-2026-42583 in netty-codec pulled by
     //                         redis-authx-core under promotion-service.
+    //   commons-io 2.14.0  -> fixes CVE-2024-47554 pulled by Twilio under
+    //                         notification-service.
     //   kotlin 1.9.24      -> pin to the Kotlin Gradle plugin version so stdlib/reflect do
     //                         not skew against the 2.x the BOM would otherwise force.
     extra["tomcat.version"] = "10.1.55"
@@ -77,6 +79,7 @@ subprojects {
         "testImplementation"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
         "annotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
         "testAnnotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "implementation"("commons-io:commons-io:2.14.0")
         "compileOnly"("org.projectlombok:lombok")
         "annotationProcessor"("org.projectlombok:lombok")
         "testCompileOnly"("org.projectlombok:lombok")
