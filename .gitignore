@@ -63,6 +63,11 @@ tests/performance/locust-*.csv
 # Pipeline security scanner outputs (transient; permanent evidence lives in docs/report/security/)
 tests/security/reports/
 
+# Runtime file-upload storage (form-service `form.storage.root` and file-service
+# `file.storage.root`, both default to `uploads/`). Created at runtime/test; never versioned.
+uploads/
+**/uploads/
+
 # Generated kubeconfig for the Jenkins container (created by setup-kubeconfig.ps1)
 jenkins/config/.kubeconfig-incontainer
 
