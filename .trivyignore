@@ -11,10 +11,12 @@
 #
 # Anything CRITICAL/HIGH that Trivy finds is blocking by default unless listed below.
 
-# spring-security-web: security policy bypass / information disclosure.
-# Fixed only in 6.5.9 / 7.0.4, which ship with Spring Boot 3.5.x / 4.0.x. The project
-# is pinned to the 3.4.x line (spring-security 6.4.13), so no patched version is available
-# without a major-line upgrade. Risk accepted in the interim: the affected matching logic
-# is not reachable from our authorization rules (no mvcMatchers ambiguity / servlet-path
-# remapping in use). Revisit when bumping to Spring Boot 3.5.x. Expiration: 2026-09-01.
-CVE-2026-22732
+# (No active suppressions.)
+#
+# CVE-2026-22732 (spring-security-web bypass) was previously suppressed while the
+# project was pinned to Spring Boot 3.4.x (spring-security 6.4.13, unpatched). The
+# bump to Spring Boot 3.5.14 ships spring-security-web 6.5.10 (>= the 6.5.9 fix), so
+# the vulnerability is resolved at the source and the suppression has been removed.
+# A clean-room Trivy image scan (--severity CRITICAL,HIGH --ignore-unfixed, NO
+# ignorefile) of the 3.5.14 bootJar reports 0 findings, confirming nothing else
+# needs suppressing.

@@ -1,5 +1,5 @@
 plugins {
-    id("org.springframework.boot") version "3.4.13" apply false
+    id("org.springframework.boot") version "3.5.14" apply false
     id("io.spring.dependency-management") version "1.1.4" apply false
     kotlin("jvm") version "1.9.24" apply false
     kotlin("plugin.spring") version "1.9.24" apply false
@@ -57,22 +57,23 @@ subprojects {
     }
 
     // Override Spring Boot BOM managed versions to pull CVE-patched releases while
-    // staying on the 3.4.x line. Read by io.spring.dependency-management as BOM
+    // staying on the 3.5.x line. Read by io.spring.dependency-management as BOM
     // property overrides:
     //   tomcat 10.1.55     -> fixes CVE-2026-41293/43512/43515/41284/42498/43513 and
-    //                         CVE-2026-24734/24880/34483/34487 (3.4.13 BOM ships 10.1.50).
-    //   postgresql 42.7.11 -> fixes CVE-2026-42198 SCRAM client DoS (BOM ships 42.7.8).
+    //                         CVE-2026-24734/24880/34483/34487 (3.5.14 BOM ships an
+    //                         older 10.1.x; pin forward to the patched line).
+    //   postgresql 42.7.11 -> fixes CVE-2026-42198 SCRAM client DoS.
     //   kotlin 1.9.24      -> pin to the Kotlin Gradle plugin version so stdlib/reflect do
-    //                         not skew against the 2.x the 3.4.13 BOM would otherwise force.
+    //                         not skew against the 2.x the BOM would otherwise force.
     extra["tomcat.version"] = "10.1.55"
     extra["postgresql.version"] = "42.7.11"
     extra["kotlin.version"] = "1.9.24"
 
     dependencies {
-        "implementation"(platform("org.springframework.boot:spring-boot-dependencies:3.4.13"))
-        "testImplementation"(platform("org.springframework.boot:spring-boot-dependencies:3.4.13"))
-        "annotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.4.13"))
-        "testAnnotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.4.13"))
+        "implementation"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "testImplementation"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "annotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "testAnnotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
         "compileOnly"("org.projectlombok:lombok")
         "annotationProcessor"("org.projectlombok:lombok")
         "testCompileOnly"("org.projectlombok:lombok")
