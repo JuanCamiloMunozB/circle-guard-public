@@ -86,8 +86,16 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 container('gradle') {
+                    // The org.sonarqube 5.x plugin does NOT add a task dependency on
+                    // compilation, so running `sonar` alone leaves sonar.java.binaries
+                    // empty and analysis aborts with "please provide compiled classes".
+                    // We therefore run `classes` (main compilation) and `jacocoTestReport`
+                    // (produces the coverage XML referenced by sonar.coverage.jacoco.xmlReportPaths)
+                    // in the same invocation before `sonar`. The unit/integration test tasks
+                    // ran in earlier stages within this same workspace, so their exec data is
+                    // reused and the test tasks are UP-TO-DATE here.
                     withSonarQubeEnv('sonarqube') {
-                        sh './gradlew sonar -Dsonar.qualitygate.wait=true --info'
+                        sh './gradlew classes jacocoTestReport sonar -Dsonar.qualitygate.wait=true --info'
                     }
                 }
             }
