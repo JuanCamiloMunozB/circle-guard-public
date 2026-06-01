@@ -1,5 +1,18 @@
+// CircleGuard master/prod pipeline.
+//
+// Same execution model as stage (ephemeral pod in AKS via kubernetes plugin), but:
+//   - Targets namespace circleguard-master.
+//   - Uses Kaniko to publish vN release tags AND `latest` to Docker Hub.
+//   - Requires a manual approval (`input`) before promoting the release.
+//   - Generates and archives release notes from Conventional Commits.
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            cloud 'aks-cg'
+            defaultContainer 'jnlp'
+            yamlFile 'jenkins/podtemplates/kaniko-build-agent.yaml'
+        }
+    }
 
     options {
         timeout(time: 60, unit: 'MINUTES')
@@ -9,13 +22,14 @@ pipeline {
     }
 
     parameters {
-        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
+        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Kaniko image build (reuse existing tags)')
     }
 
     environment {
-        REGISTRY      = 'circleguard'
-        K8S_NAMESPACE = 'circleguard-master'
-        IMAGE_TAG     = "v${BUILD_NUMBER}"
+        REGISTRY        = 'docker.io/circleguard'
+        K8S_NAMESPACE   = 'circleguard-master'
+        IMAGE_TAG       = "v${BUILD_NUMBER}"
+        TARGET_PLATFORM = 'linux/arm64'
     }
 
     stages {
@@ -33,15 +47,17 @@ pipeline {
 
         stage('Unit Tests') {
             steps {
-                sh './gradlew :services:circleguard-auth-service:test \
-                              :services:circleguard-identity-service:test \
-                              :services:circleguard-form-service:test \
-                              :services:circleguard-promotion-service:test \
-                              :services:circleguard-notification-service:test \
-                              :services:circleguard-dashboard-service:test \
-                              :services:circleguard-gateway-service:test \
-                              :services:circleguard-file-service:test \
-                    --continue'
+                container('gradle') {
+                    sh './gradlew :services:circleguard-auth-service:test \
+                                  :services:circleguard-identity-service:test \
+                                  :services:circleguard-form-service:test \
+                                  :services:circleguard-promotion-service:test \
+                                  :services:circleguard-notification-service:test \
+                                  :services:circleguard-dashboard-service:test \
+                                  :services:circleguard-gateway-service:test \
+                                  :services:circleguard-file-service:test \
+                        --continue'
+                }
             }
             post {
                 always {
@@ -52,12 +68,14 @@ pipeline {
 
         stage('Integration Tests') {
             steps {
-                sh './gradlew :services:circleguard-form-service:integrationTest \
-                              :services:circleguard-promotion-service:integrationTest \
-                              :services:circleguard-notification-service:integrationTest \
-                              :services:circleguard-identity-service:integrationTest \
-                              :services:circleguard-dashboard-service:integrationTest \
-                    --continue'
+                container('gradle') {
+                    sh './gradlew :services:circleguard-form-service:integrationTest \
+                                  :services:circleguard-promotion-service:integrationTest \
+                                  :services:circleguard-notification-service:integrationTest \
+                                  :services:circleguard-identity-service:integrationTest \
+                                  :services:circleguard-dashboard-service:integrationTest \
+                        --continue'
+                }
             }
             post {
                 always {
@@ -69,50 +87,76 @@ pipeline {
         stage('Build JARs') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
-                sh './gradlew :services:circleguard-auth-service:bootJar \
-                              :services:circleguard-identity-service:bootJar \
-                              :services:circleguard-form-service:bootJar \
-                              :services:circleguard-promotion-service:bootJar \
-                              :services:circleguard-notification-service:bootJar \
-                              :services:circleguard-dashboard-service:bootJar \
-                              :services:circleguard-gateway-service:bootJar \
-                              :services:circleguard-file-service:bootJar \
-                    --parallel'
+                container('gradle') {
+                    sh './gradlew :services:circleguard-auth-service:bootJar \
+                                  :services:circleguard-identity-service:bootJar \
+                                  :services:circleguard-form-service:bootJar \
+                                  :services:circleguard-promotion-service:bootJar \
+                                  :services:circleguard-notification-service:bootJar \
+                                  :services:circleguard-dashboard-service:bootJar \
+                                  :services:circleguard-gateway-service:bootJar \
+                                  :services:circleguard-file-service:bootJar \
+                        --parallel'
+                }
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Build & Push Images (Kaniko)') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
-                script {
-                    def services = [
-                        [name: 'auth-service',         dir: 'circleguard-auth-service'],
-                        [name: 'identity-service',     dir: 'circleguard-identity-service'],
-                        [name: 'form-service',         dir: 'circleguard-form-service'],
-                        [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
-                        [name: 'notification-service', dir: 'circleguard-notification-service'],
-                        [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
-                        [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
-                        [name: 'file-service',         dir: 'circleguard-file-service'],
-                    ]
-                    services.each { svc ->
-                        sh "docker build -f services/${svc.dir}/Dockerfile -t ${REGISTRY}/${svc.name}:${IMAGE_TAG} ."
-                        sh "docker tag ${REGISTRY}/${svc.name}:${IMAGE_TAG} ${REGISTRY}/${svc.name}:latest"
+                container('kaniko') {
+                    script {
+                        def services = [
+                            [name: 'auth-service',         dir: 'circleguard-auth-service'],
+                            [name: 'identity-service',     dir: 'circleguard-identity-service'],
+                            [name: 'form-service',         dir: 'circleguard-form-service'],
+                            [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
+                            [name: 'notification-service', dir: 'circleguard-notification-service'],
+                            [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
+                            [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
+                            [name: 'file-service',         dir: 'circleguard-file-service'],
+                        ]
+                        services.each { svc ->
+                            sh """
+                                /kaniko/executor \\
+                                    --context=`pwd` \\
+                                    --dockerfile=services/${svc.dir}/Dockerfile \\
+                                    --destination=${REGISTRY}/${svc.name}:${IMAGE_TAG} \\
+                                    --destination=${REGISTRY}/${svc.name}:latest \\
+                                    --customPlatform=${TARGET_PLATFORM} \\
+                                    --single-snapshot \\
+                                    --no-push-cache
+                            """
+                        }
                     }
+                }
+            }
+        }
+
+        stage('Approval: promote to production') {
+            steps {
+                // Pause the pipeline OUTSIDE any container block so the pod can idle cheaply
+                // while a human approves. Times out after 30 minutes.
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Promote release ${IMAGE_TAG} to production?",
+                          ok: 'Promote',
+                          submitter: 'admin',
+                          submitterParameter: 'APPROVER'
                 }
             }
         }
 
         stage('Deploy to Master') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('kubectl') {
                     sh "kubectl apply -f k8s/namespaces.yaml"
                     sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/deployments/ -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
                     script {
                         ['auth-service', 'identity-service', 'form-service',
-                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
                             sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${IMAGE_TAG} -n ${K8S_NAMESPACE}"
                         }
                     }
@@ -122,10 +166,11 @@ pipeline {
 
         stage('Wait for Rollout') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('kubectl') {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
-                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
                             sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
                         }
                     }
@@ -135,7 +180,7 @@ pipeline {
 
         stage('E2E Tests') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('kubectl') {
                     sh """
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/auth-service         8180:8180 &
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/identity-service     8083:8083 &
@@ -154,7 +199,9 @@ pipeline {
             }
             post {
                 always {
-                    sh 'pkill -f "kubectl port-forward" || true'
+                    container('kubectl') {
+                        sh 'pkill -f "kubectl port-forward" || true'
+                    }
                     junit 'tests/e2e/build/test-results/test/*.xml'
                 }
             }
@@ -162,13 +209,12 @@ pipeline {
 
         stage('Performance Tests') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('python') {
                     sh """
+                        pip install --quiet locust
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/form-service      8086:8086 &
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/dashboard-service 8084:8084 &
                         sleep 3
-                        export PATH="\$PATH:\$HOME/.local/bin"
-                        pip3 show locust >/dev/null 2>&1 || pip3 install locust --quiet --break-system-packages
                         chmod +x jenkins/scripts/run-locust.sh
                         LOCUST_HOST=http://localhost:8086 DASHBOARD_HOST=http://localhost:8084 PROFILE=master \\
                         jenkins/scripts/run-locust.sh
@@ -177,7 +223,9 @@ pipeline {
             }
             post {
                 always {
-                    sh 'pkill -f "kubectl port-forward" || true'
+                    container('python') {
+                        sh 'pkill -f "kubectl port-forward" || true'
+                    }
                     publishHTML(target: [
                         reportDir: 'tests/performance/reports',
                         reportFiles: 'locust-report-master.html',
@@ -190,8 +238,10 @@ pipeline {
 
         stage('Generate Release Notes') {
             steps {
-                sh "chmod +x jenkins/scripts/generate-release-notes.sh"
-                sh "jenkins/scripts/generate-release-notes.sh ${IMAGE_TAG} ${BUILD_NUMBER} ${K8S_NAMESPACE} docs/release-notes-${IMAGE_TAG}.md"
+                container('gradle') {
+                    sh "chmod +x jenkins/scripts/generate-release-notes.sh"
+                    sh "jenkins/scripts/generate-release-notes.sh ${IMAGE_TAG} ${BUILD_NUMBER} ${K8S_NAMESPACE} docs/release-notes-${IMAGE_TAG}.md"
+                }
                 archiveArtifacts artifacts: "docs/release-notes-${IMAGE_TAG}.md"
             }
         }
@@ -206,6 +256,7 @@ pipeline {
             echo "MASTER pipeline succeeded - Release ${IMAGE_TAG}"
         }
         failure {
+            // TODO Phase 8 (sec.8.6): replace with slackSend / emailext.
             echo "MASTER pipeline failed - Build #${BUILD_NUMBER}"
         }
     }
