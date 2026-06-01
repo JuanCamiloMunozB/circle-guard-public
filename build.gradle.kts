@@ -63,10 +63,13 @@ subprojects {
     //                         CVE-2026-24734/24880/34483/34487 (3.5.14 BOM ships an
     //                         older 10.1.x; pin forward to the patched line).
     //   postgresql 42.7.11 -> fixes CVE-2026-42198 SCRAM client DoS.
+    //   netty 4.1.133.Final -> fixes CVE-2026-42583 in netty-codec pulled by
+    //                         redis-authx-core under promotion-service.
     //   kotlin 1.9.24      -> pin to the Kotlin Gradle plugin version so stdlib/reflect do
     //                         not skew against the 2.x the BOM would otherwise force.
     extra["tomcat.version"] = "10.1.55"
     extra["postgresql.version"] = "42.7.11"
+    extra["netty.version"] = "4.1.133.Final"
     extra["kotlin.version"] = "1.9.24"
 
     dependencies {
