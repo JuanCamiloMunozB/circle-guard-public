@@ -14,6 +14,7 @@ spec:
       labels:
         app: dashboard-service
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: dashboard-service
           image: circleguard/dashboard-service:latest

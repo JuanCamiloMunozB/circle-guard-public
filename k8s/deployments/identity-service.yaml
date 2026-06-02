@@ -14,6 +14,7 @@ spec:
       labels:
         app: identity-service
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: identity-service
           image: circleguard/identity-service:latest

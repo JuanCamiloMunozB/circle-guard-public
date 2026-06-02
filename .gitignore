@@ -74,6 +74,7 @@ jenkins/config/.kubeconfig-incontainer
 # Real Docker Hub registry credentials for Kaniko (never commit).
 # Only the .example template is versioned; the .yaml is built from it locally.
 k8s/jenkins/dockerhub-secret.yaml
+k8s/circleguard-secrets.yaml
 jenkins/config/.dockerconfig.json
 
 # Jenkins AKS credentials Secret (only the .example is versioned)

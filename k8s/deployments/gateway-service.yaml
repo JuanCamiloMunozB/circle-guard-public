@@ -14,6 +14,7 @@ spec:
       labels:
         app: gateway-service
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: gateway-service
           image: circleguard/gateway-service:latest

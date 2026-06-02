@@ -43,17 +43,7 @@ data:
   QR_EXPIRATION: "300"
   FEATURE_SMS_ALERTS_ENABLED: "false"
   MANAGEMENT_HEALTH_PROBES_ENABLED: "true"
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: circleguard-secrets
-type: Opaque
-stringData:
-  SPRING_DATASOURCE_PASSWORD: password
-  SPRING_NEO4J_AUTHENTICATION_PASSWORD: password
-  SPRING_LDAP_PASSWORD: admin
-  JWT_SECRET: my-super-secret-dev-key-32-chars-long-12345678
-  QR_SECRET: my-qr-secret-key-for-dev-1234567890
-  VAULT_SECRET: dev-only-vault-secret-not-for-prod-change-in-production
-  VAULT_SALT: dev-only-salt-change-in-production
+# circleguard-secrets is NOT stored here.
+# Copy k8s/circleguard-secrets.example.yaml -> k8s/circleguard-secrets.yaml,
+# fill in real values, then: kubectl apply -f k8s/circleguard-secrets.yaml -n <namespace>
+# The file k8s/circleguard-secrets.yaml is gitignored — never commit it.
