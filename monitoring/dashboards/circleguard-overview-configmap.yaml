@@ -11,83 +11,345 @@ metadata:
 data:
   circleguard-overview.json: |-
     {
-      "title": "CircleGuard — Services Overview",
-      "uid": "circleguard-overview",
-      "schemaVersion": 38,
-      "refresh": "30s",
-      "time": { "from": "now-1h", "to": "now" },
-      "tags": ["circleguard", "microservices"],
+      "__inputs": [],
+      "__requires": [
+        { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+        { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+        { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
+        { "type": "panel", "id": "stat", "name": "Stat", "version": "" },
+        { "type": "panel", "id": "gauge", "name": "Gauge", "version": "" },
+        { "type": "panel", "id": "barchart", "name": "Bar chart", "version": "" }
+      ],
+      "annotations": { "list": [] },
+      "description": "CircleGuard microservices — per-service HTTP traffic, JVM, circuit breakers and business metrics",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
       "panels": [
         {
-          "id": 1,
-          "title": "Request Rate (req/s)",
-          "type": "timeseries",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 100,
+          "title": "HTTP Traffic",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
-          "targets": [{
-            "expr": "sum by (app) (rate(http_server_requests_seconds_count{app=~\".*-service\"}[2m]))",
-            "legendFormat": "{{app}}"
-          }],
-          "fieldConfig": { "defaults": { "unit": "reqps" } }
-        },
-        {
-          "id": 2,
-          "title": "5xx Error Rate",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
-          "targets": [{
-            "expr": "sum by (app) (rate(http_server_requests_seconds_count{status=~\"5..\",app=~\".*-service\"}[2m])) / sum by (app) (rate(http_server_requests_seconds_count{app=~\".*-service\"}[2m]))",
-            "legendFormat": "{{app}}"
-          }],
-          "fieldConfig": { "defaults": { "unit": "percentunit" } }
-        },
-        {
-          "id": 3,
-          "title": "HTTP Latency P50 / P99",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+          "id": 1,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum by (app, le) (rate(http_server_requests_seconds_bucket{app=~\".*-service\"}[5m])))",
-              "legendFormat": "p99 {{app}}"
-            },
-            {
-              "expr": "histogram_quantile(0.50, sum by (app, le) (rate(http_server_requests_seconds_bucket{app=~\".*-service\"}[5m])))",
-              "legendFormat": "p50 {{app}}"
+              "expr": "sum by (application) (rate(http_server_requests_seconds_count{application=~\"$service\"}[2m]))",
+              "legendFormat": "{{application}}",
+              "refId": "A"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
+          "title": "Request Rate (req/s)",
+          "type": "timeseries"
         },
         {
-          "id": 4,
-          "title": "JVM Heap Memory",
-          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "percentunit",
+              "max": 1,
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.05 },
+                  { "color": "red", "value": 0.10 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+          "id": 2,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (application) (rate(http_server_requests_seconds_count{status=~\"5..\",application=~\"$service\"}[2m])) / sum by (application) (rate(http_server_requests_seconds_count{application=~\"$service\"}[2m]))",
+              "legendFormat": "{{application}}",
+              "refId": "A"
+            }
+          ],
+          "title": "5xx Error Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+          "id": 3,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (application, le) (rate(http_server_requests_seconds_bucket{application=~\"$service\"}[5m])))",
+              "legendFormat": "p99 {{application}}",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum by (application, le) (rate(http_server_requests_seconds_bucket{application=~\"$service\"}[5m])))",
+              "legendFormat": "p50 {{application}}",
+              "refId": "B"
+            }
+          ],
+          "title": "HTTP Latency P50 / P99",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+          "id": 101,
+          "title": "JVM",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
-          "targets": [{
-            "expr": "sum by (app) (jvm_memory_used_bytes{area=\"heap\",app=~\".*-service\"})",
-            "legendFormat": "{{app}}"
-          }],
-          "fieldConfig": { "defaults": { "unit": "bytes" } }
+          "id": 4,
+          "options": { "legend": { "calcs": ["mean", "last"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (application) (jvm_memory_used_bytes{area=\"heap\", application=~\"$service\"})",
+              "legendFormat": "{{application}} used",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (application) (jvm_memory_max_bytes{area=\"heap\", application=~\"$service\"})",
+              "legendFormat": "{{application}} max",
+              "refId": "B"
+            }
+          ],
+          "title": "JVM Heap Memory",
+          "type": "timeseries"
         },
         {
-          "id": 5,
-          "title": "CPU Usage",
-          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "percentunit",
+              "max": 1,
+              "min": 0
+            },
+            "overrides": []
+          },
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
-          "targets": [{
-            "expr": "process_cpu_usage{app=~\".*-service\"}",
-            "legendFormat": "{{app}}"
-          }],
-          "fieldConfig": { "defaults": { "unit": "percentunit" } }
+          "id": 5,
+          "options": { "legend": { "calcs": ["mean", "last"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "process_cpu_usage{application=~\"$service\"}",
+              "legendFormat": "{{application}}",
+              "refId": "A"
+            }
+          ],
+          "title": "CPU Usage",
+          "type": "timeseries"
         },
         {
-          "id": 6,
-          "title": "Circuit Breaker State",
-          "type": "stat",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+          "id": 102,
+          "title": "Resilience4j Circuit Breakers",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "options": { "0": { "text": "CLOSED" }, "1": { "text": "OPEN" }, "2": { "text": "HALF_OPEN" } }, "type": "value" }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 },
+                  { "color": "yellow", "value": 2 }
+                ]
+              },
+              "color": { "mode": "thresholds" }
+            },
+            "overrides": []
+          },
           "gridPos": { "h": 6, "w": 24, "x": 0, "y": 27 },
-          "targets": [{
-            "expr": "resilience4j_circuitbreaker_state{state=\"open\"}",
-            "legendFormat": "{{name}}"
-          }]
+          "id": 6,
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "targets": [
+            {
+              "expr": "resilience4j_circuitbreaker_state{state=\"open\", application=~\"$service\"}",
+              "legendFormat": "{{name}} ({{application}})",
+              "refId": "A"
+            }
+          ],
+          "title": "Circuit Breaker State (0=CLOSED, 1=OPEN, 2=HALF_OPEN)",
+          "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+          "id": 103,
+          "title": "Business Metrics",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+          "id": 7,
+          "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (result) (increase(circleguard_logins_total{application=~\"$service\"}[5m]))",
+              "legendFormat": "login {{result}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Login Attempts (5m window)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+          "id": 8,
+          "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (result) (increase(circleguard_gate_validations_total{application=~\"$service\"}[5m]))",
+              "legendFormat": "gate {{result}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Campus Gate Validations (5m window)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 42 },
+          "id": 9,
+          "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (symptoms) (increase(circleguard_surveys_submitted_total{application=~\"$service\"}[5m]))",
+              "legendFormat": "surveys symptoms={{symptoms}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Health Surveys Submitted (5m window)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "lineWidth": 1, "fillOpacity": 10 },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 42 },
+          "id": 10,
+          "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "targets": [
+            {
+              "expr": "sum by (status) (increase(circleguard_status_changes_total{application=~\"$service\"}[5m]))",
+              "legendFormat": "status {{status}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Health Status Changes (5m window)",
+          "type": "timeseries"
         }
-      ]
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "tags": ["circleguard", "microservices"],
+      "templating": {
+        "list": [
+          {
+            "current": {},
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "definition": "label_values(jvm_info, application)",
+            "hide": 0,
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "name": "service",
+            "options": [],
+            "query": {
+              "query": "label_values(jvm_info, application)",
+              "refId": "StandardVariableQuery"
+            },
+            "refresh": 2,
+            "regex": "",
+            "sort": 1,
+            "label": "Service",
+            "type": "query"
+          }
+        ]
+      },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "CircleGuard — Services Overview",
+      "uid": "circleguard-overview",
+      "version": 2
     }
+    
