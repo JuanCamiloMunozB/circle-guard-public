@@ -2,6 +2,7 @@ package com.circleguard.auth.controller;
 
 import com.circleguard.auth.service.JwtTokenService;
 import com.circleguard.auth.client.IdentityClient;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.*;
@@ -17,6 +18,7 @@ public class LoginController {
     private final AuthenticationManager authManager;
     private final JwtTokenService jwtService;
     private final IdentityClient identityClient;
+    private final MeterRegistry meterRegistry;
 
     @PostMapping("/login")
     public ResponseEntity<Map<String, String>> login(@RequestBody Map<String, String> request) {
@@ -39,6 +41,7 @@ public class LoginController {
             Optional<UUID> maybeAnonymousId = identityClient.getAnonymousId(username);
             if (maybeAnonymousId.isEmpty()) {
                 System.err.println("Identity service degraded — denying login for " + username);
+                meterRegistry.counter("circleguard.logins", "result", "identity_degraded").increment();
                 return ResponseEntity.status(503).body(Map.of(
                         "message", "Identity service temporarily unavailable, please retry"
                 ));
@@ -49,6 +52,7 @@ public class LoginController {
             // 3. Issue Token
             String token = jwtService.generateToken(anonymousId, auth);
 
+            meterRegistry.counter("circleguard.logins", "result", "success").increment();
             return ResponseEntity.ok(Map.of(
                     "token", token,
                     "type", "Bearer",
@@ -56,10 +60,12 @@ public class LoginController {
             ));
         } catch (org.springframework.security.core.AuthenticationException e) {
             System.err.println("Authentication failed for " + username + ": " + e.getMessage());
+            meterRegistry.counter("circleguard.logins", "result", "failure").increment();
             return ResponseEntity.status(401).body(Map.of("message", "Invalid username or password"));
         } catch (Exception e) {
             System.err.println("Unexpected error during login for " + username + ":");
             e.printStackTrace();
+            meterRegistry.counter("circleguard.logins", "result", "error").increment();
             return ResponseEntity.status(500).body(Map.of("message", "Internal server error: " + e.getMessage()));
         }
     }

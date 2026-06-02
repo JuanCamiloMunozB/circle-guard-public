@@ -2,6 +2,7 @@ package com.circleguard.promotion.service;
 
 import com.circleguard.promotion.exception.FenceException;
 import com.circleguard.promotion.repository.graph.UserNodeRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
@@ -23,6 +24,7 @@ public class HealthStatusService {
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final com.circleguard.promotion.repository.jpa.SystemSettingsRepository systemSettingsRepository;
     private final com.circleguard.promotion.repository.graph.CircleNodeRepository circleNodeRepository;
+    private final MeterRegistry meterRegistry;
 
     private static final String STATUS_KEY_PREFIX = "user:status:";
     private static final String TOPIC_STATUS_CHANGED = "promotion.status.changed";
@@ -110,6 +112,8 @@ public class HealthStatusService {
             log.info("Batch updating {} Redis entries based on consolidated propagation", cacheUpdates.size());
             updateRedisInBatches(cacheUpdates);
 
+            meterRegistry.counter("circleguard.status.changes", "status", status).increment();
+
             // Broadcast change
             Map<String, Object> payload = new HashMap<>();
             payload.put("anonymousId", anonymousId);
@@ -123,6 +127,9 @@ public class HealthStatusService {
 
             // Story 5.5: Administrative Alerting for Priority Roles
             int affectedCount = (affected != null) ? affected.size() : 0;
+            if (affectedCount > 0) {
+                meterRegistry.counter("circleguard.contacts.affected").increment(affectedCount);
+            }
             if ("CONFIRMED".equals(status) || affectedCount > 20) {
                 log.info("Priority Alert triggered. Status: {}, Affected Count: {}", status, affectedCount);
                 Map<String, Object> priorityPayload = new HashMap<>();
