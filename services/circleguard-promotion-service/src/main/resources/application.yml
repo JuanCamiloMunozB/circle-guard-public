@@ -40,5 +40,25 @@ jwt:
   secret: ${JWT_SECRET:dev-only-jwt-secret-do-not-use-in-prod-32chars}
   expiration: ${JWT_EXPIRATION:3600000}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+
 server:
   port: 8088

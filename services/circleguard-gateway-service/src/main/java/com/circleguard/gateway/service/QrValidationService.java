@@ -3,6 +3,7 @@ package com.circleguard.gateway.service;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -14,6 +15,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class QrValidationService {
     private final StringRedisTemplate redisTemplate;
+    private final MeterRegistry meterRegistry;
 
     @Value("${qr.secret}")
     private String qrSecret;
@@ -35,12 +37,15 @@ public class QrValidationService {
             String status = redisTemplate.opsForValue().get(STATUS_KEY_PREFIX + anonymousId);
             
             if ("CONTAGIED".equals(status) || "POTENTIAL".equals(status)) {
+                meterRegistry.counter("circleguard.gate.validations", "result", "denied").increment();
                 return new ValidationResult(false, "RED", "Access Denied: Health Risk Detected");
             }
 
+            meterRegistry.counter("circleguard.gate.validations", "result", "granted").increment();
             return new ValidationResult(true, "GREEN", "Welcome to Campus");
-            
+
         } catch (Exception e) {
+            meterRegistry.counter("circleguard.gate.validations", "result", "invalid_token").increment();
             return new ValidationResult(false, "RED", "Invalid or Expired Token");
         }
     }
