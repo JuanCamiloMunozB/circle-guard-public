@@ -9,12 +9,12 @@
 #
 # Prerequisites:
 #   - docker buildx with a multi-arch builder active
-#   - docker login -u juancamuba (run first)
+#   - docker login -u <docker-hub-username> (run first)
 
 set -euo pipefail
 
-REGISTRY="docker.io/juancamuba"
-IMAGE="circleguard-jenkins"
+REGISTRY="docker.io/circleguard"
+IMAGE="jenkins-controller"
 TAG="${1:-lts}"
 FULL_TAG="${REGISTRY}/${IMAGE}:${TAG}"
 

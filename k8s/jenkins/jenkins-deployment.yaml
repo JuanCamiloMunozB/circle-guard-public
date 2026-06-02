@@ -22,7 +22,7 @@ spec:
         - name: jenkins
           # Custom image built from jenkins/config/Dockerfile.jenkins.
           # Build + push once with jenkins/scripts/build-push-controller.sh before deploying.
-          image: docker.io/juancamuba/circleguard-jenkins:lts
+          image: docker.io/circleguard/jenkins-controller:lts
           imagePullPolicy: Always
           ports:
             - name: http
