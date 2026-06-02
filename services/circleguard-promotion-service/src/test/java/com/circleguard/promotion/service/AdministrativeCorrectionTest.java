@@ -1,4 +1,4 @@
-package com.circleguard.promotion.service;
+﻿package com.circleguard.promotion.service;
 
 import com.circleguard.promotion.model.graph.CircleNode;
 import com.circleguard.promotion.model.graph.UserNode;
@@ -14,7 +14,7 @@ import org.neo4j.harness.Neo4j;
 import org.neo4j.harness.Neo4jBuilders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -71,7 +71,7 @@ public class AdministrativeCorrectionTest {
     @Autowired
     private CircleNodeRepository circleRepository;
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, Object> kafkaTemplate;
 
     @BeforeEach

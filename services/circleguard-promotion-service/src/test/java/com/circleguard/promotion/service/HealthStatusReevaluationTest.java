@@ -1,4 +1,4 @@
-package com.circleguard.promotion.service;
+﻿package com.circleguard.promotion.service;
 
 import com.github.fppt.jedismock.RedisServer;
 import org.junit.jupiter.api.AfterAll;
@@ -10,7 +10,7 @@ import org.neo4j.harness.Neo4j;
 import org.neo4j.harness.Neo4jBuilders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -62,7 +62,7 @@ public class HealthStatusReevaluationTest {
     @Autowired
     private Neo4jClient neo4jClient;
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, Object> kafkaTemplate;
 
     @BeforeEach

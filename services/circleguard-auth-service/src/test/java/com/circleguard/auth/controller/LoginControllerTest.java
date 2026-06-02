@@ -1,4 +1,4 @@
-package com.circleguard.auth.controller;
+﻿package com.circleguard.auth.controller;
 
 import com.circleguard.auth.client.IdentityClient;
 import com.circleguard.auth.service.JwtTokenService;
@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Import;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -30,16 +30,16 @@ public class LoginControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private AuthenticationManager authManager;
 
-    @MockBean
+    @MockitoBean
     private JwtTokenService jwtService;
 
-    @MockBean
+    @MockitoBean
     private IdentityClient identityClient;
 
-    @MockBean
+    @MockitoBean
     private CustomUserDetailsService userDetailsService;
 
     @Test

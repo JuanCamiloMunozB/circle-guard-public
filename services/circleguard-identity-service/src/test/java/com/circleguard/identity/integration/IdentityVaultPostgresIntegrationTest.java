@@ -1,11 +1,11 @@
-package com.circleguard.identity.integration;
+﻿package com.circleguard.identity.integration;
 
 import com.circleguard.identity.service.IdentityVaultService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.*;
                 "spring.flyway.enabled=false",
                 "spring.jpa.hibernate.ddl-auto=create-drop",
                 // Kafka connections are lazy — this placeholder prevents autoconfiguration
-                // from failing at startup. KafkaTemplate is replaced by @MockBean below.
+                // from failing at startup. KafkaTemplate is replaced by @MockitoBean below.
                 "spring.kafka.bootstrap-servers=localhost:9092"
         }
 )
@@ -69,7 +69,7 @@ class IdentityVaultPostgresIntegrationTest {
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
     }
 
-    @MockBean
+    @MockitoBean
     @SuppressWarnings("unused")
     KafkaTemplate<String, Object> kafkaTemplate;
 

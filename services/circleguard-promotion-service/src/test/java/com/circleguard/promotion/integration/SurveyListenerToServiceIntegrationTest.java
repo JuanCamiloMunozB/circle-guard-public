@@ -42,7 +42,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
         "spring.kafka.producer.value-serializer=org.springframework.kafka.support.serializer.JsonSerializer",
-        "spring.main.allow-bean-definition-overriding=true"
+        "spring.main.allow-bean-definition-overriding=true",
+        // application-test.yml disables auto-startup to prevent listeners from connecting
+        // to localhost:9092 in unit tests. Re-enable here since embedded Kafka is running.
+        "spring.kafka.listener.auto-startup=true"
 })
 @EmbeddedKafka(partitions = 1, topics = {
         "survey.submitted",

@@ -1,11 +1,11 @@
-package com.circleguard.identity.integration;
+﻿package com.circleguard.identity.integration;
 
 import com.circleguard.identity.service.IdentityVaultService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -32,10 +32,10 @@ class IdentityMappingIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private IdentityVaultService vaultService;
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, Object> kafkaTemplate;
 
     // Integration Test 11: POST /api/v1/identities/map returns anonymousId for valid body

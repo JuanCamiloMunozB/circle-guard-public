@@ -1,4 +1,4 @@
-package com.circleguard.auth.controller;
+﻿package com.circleguard.auth.controller;
 
 import com.circleguard.auth.model.LocalUser;
 import com.circleguard.auth.repository.LocalUserRepository;
@@ -8,7 +8,7 @@ import com.circleguard.auth.service.JwtTokenService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -28,13 +28,13 @@ class UserControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private LocalUserRepository repo;
-    @MockBean
+    @MockitoBean
     private AuthenticationManager authManager;
-    @MockBean
+    @MockitoBean
     private JwtTokenService jwtService;
-    @MockBean
+    @MockitoBean
     private CustomUserDetailsService userDetailsService;
 
     @Test

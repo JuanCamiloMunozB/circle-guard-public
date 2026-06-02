@@ -1,4 +1,4 @@
-package com.circleguard.form.controller;
+﻿package com.circleguard.form.controller;
 
 import com.circleguard.form.model.HealthSurvey;
 import com.circleguard.form.model.ValidationStatus;
@@ -6,7 +6,7 @@ import com.circleguard.form.service.HealthSurveyService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
@@ -24,7 +24,7 @@ class CertificateValidationControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private HealthSurveyService surveyService;
 
     @Test

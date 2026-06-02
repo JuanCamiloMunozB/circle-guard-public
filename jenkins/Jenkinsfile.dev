@@ -92,6 +92,16 @@ pipeline {
                 // inside the test JVM even when the shell itself can reach the socket fine.
                 // --stop before running ensures no stale daemon with wrong groups is reused.
                 sh './gradlew --stop'
+                // Authenticate to Docker Hub before Testcontainers pulls images.
+                // Anonymous pulls are rate-limited (100/6h per IP); authenticated
+                // pulls get 200/h per user. Uses the same dockerhub-creds credential
+                // that Kaniko uses in the Build & Push stage.
+                withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DH_USER',
+                        passwordVariable: 'DH_PASS')]) {
+                    sh 'echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin'
+                }
                 sh './gradlew :services:circleguard-form-service:integrationTest \
                               :services:circleguard-promotion-service:integrationTest \
                               :services:circleguard-notification-service:integrationTest \

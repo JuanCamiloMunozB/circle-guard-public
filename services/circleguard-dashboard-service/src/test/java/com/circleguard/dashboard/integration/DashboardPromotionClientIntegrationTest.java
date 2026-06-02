@@ -1,4 +1,4 @@
-package com.circleguard.dashboard.integration;
+﻿package com.circleguard.dashboard.integration;
 
 import com.circleguard.dashboard.client.PromotionClient;
 import com.circleguard.dashboard.service.AnalyticsService;
@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.Map;
@@ -26,10 +26,10 @@ class DashboardPromotionClientIntegrationTest {
     @Autowired
     private AnalyticsService analyticsService;
 
-    @MockBean
+    @MockitoBean
     private PromotionClient promotionClient;
 
-    @MockBean
+    @MockitoBean
     private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     // Integration Test 5: getCampusSummary wires through to PromotionClient within Spring context
