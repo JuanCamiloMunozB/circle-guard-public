@@ -4,6 +4,7 @@ import com.circleguard.form.model.HealthSurvey;
 import com.circleguard.form.model.Questionnaire;
 import com.circleguard.form.model.ValidationStatus;
 import com.circleguard.form.repository.HealthSurveyRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -40,7 +41,7 @@ class HealthSurveyServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new HealthSurveyService(repository, questionnaireService, symptomMapper, kafkaTemplate);
+        service = new HealthSurveyService(repository, questionnaireService, symptomMapper, kafkaTemplate, new SimpleMeterRegistry());
     }
 
     // --- Unit Test 1: survey without symptoms should save and publish Kafka event ---
