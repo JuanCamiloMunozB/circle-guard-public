@@ -80,11 +80,13 @@ liberar todo: `terraform destroy`.
 | 2026-05-24 | `az aks stop aks-cg-dev` (powerState=Stopped verificado) | dev | n/a | 0.00 | ~99.99 | Jose M. |
 | 2026-05-24 | Discos+LB residuales dev (apagado) | dev | continuo | ~0.18/dia | (se acumula) | Jose M. |
 | 2026-05-24 | HU-04: validacion de manifiestos K8s (8 servicios + infra deps) con `kind` local + `kubectl apply --dry-run=client/server`. AKS NO encendido: las imagenes ARM64 multi-arch aun no existen en Docker Hub, asi que `Ready` se cerrara en Fase 5/HU-05 cuando Kaniko publique. | dev (no tocado) | 0 min en AKS | 0.00 | ~99.99 | Jose M. |
+| 2026-05-25 | HU-05 (Fase 5a): cambios estructurales de Jenkins hibrido. Refactor de 3 Jenkinsfiles (`agent any` -> agente local Kaniko / pod efimero AKS), Pod Template ARM64, cloud Kubernetes en CASC, credenciales Docker Hub como Jenkins Credentials + Secret K8s. Sin ejecutar pipelines (sin token Docker Hub real); verificacion end-to-end queda para Fase 5b. AKS NO encendido. | n/a (config + docs) | 0 min en AKS | 0.00 | ~99.99 | Jose M. |
+| 2026-05-25 | HU-08 (Fase 8a): quality gates + escaneo de seguridad. Sonar/Trivy/ZAP stages en los 3 Jenkinsfiles, semver `bump-and-tag.sh`, slackSend+emailext reales reemplazando los `echo`. Evidencia local: Trivy real sobre `eclipse-temurin:21-jre-alpine` (1 finding), ZAP baseline real sobre httpbin.org (14 WARN, 0 FAIL, 53 PASS, reportes HTML+JSON+MD archivados), tag `v0.1.0` creado por el script. Pipeline-execution evidence (quality gate bloqueante, Slack en fallo provocado, ZAP contra stage) queda para Fase 8b. AKS NO encendido. | n/a (config + docs) | 0 min en AKS | 0.00 | ~99.99 | Jose M. |
 
 > Actualizar esta tabla **cada** vez que se ejecute `az aks start/stop` o un `terraform
 > apply/destroy` en cualquier ambiente.
 
-## Reglas duras (CLAUDE.md §6)
+## Reglas duras
 
 1. AKS solo encendido cuando se esta usando activamente; apagar **inmediatamente** despues.
 2. Validar `powerState.code == "Stopped"` tras cada apagado.

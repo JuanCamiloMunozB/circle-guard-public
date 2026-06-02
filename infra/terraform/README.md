@@ -25,7 +25,7 @@ infra/terraform/
 - **Cuota PBS Family ARM64:** 6 vCPU total en la región. dev (2 vCPU) + stage (2 vCPU) caben juntos; prod (4 vCPU) requiere dev+stage apagados.
 - **Kubernetes:** versiones `1.33, 1.34, 1.35` (LTS-only < 1.33 requiere Premium tier, no viable en Free).
 
-## Mandato de costo (CLAUDE.md §6)
+## Mandato de costo
 
 - Crédito Azure: **100 USD** (Azure for Students).
 - AKS solo encendido cuando se necesite y apagado inmediatamente después (comando: `az aks stop`).

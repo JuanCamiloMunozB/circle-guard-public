@@ -1,20 +1,36 @@
+// CircleGuard stage pipeline.
+//
+// Runs in an ephemeral pod inside AKS (kubernetes plugin), scheduled from the
+// Kubernetes cloud declared in jenkins/config/casc.yaml. The pod is destroyed when
+// the build finishes (no persistent agents on the cluster).
+//
+// The pod definition lives in jenkins/podtemplates/kaniko-build-agent.yaml and
+// includes containers: gradle, kaniko, kubectl, python. Each `sh` step below is
+// wrapped in `container('<name>')` so it executes inside the right tooling image.
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            cloud 'aks-cg'
+            defaultContainer 'jnlp'
+            yamlFile 'jenkins/podtemplates/kaniko-build-agent.yaml'
+        }
+    }
 
     options {
-        timeout(time: 45, unit: 'MINUTES')
+        timeout(time: 90, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
     }
 
     parameters {
-        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
+        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Kaniko image build (reuse existing tags)')
     }
 
     environment {
-        REGISTRY      = 'circleguard'
-        K8S_NAMESPACE = 'circleguard-stage'
+        REGISTRY        = 'docker.io/circleguard'
+        K8S_NAMESPACE   = 'circleguard-stage'
+        TARGET_PLATFORM = 'linux/arm64'
     }
 
     stages {
@@ -28,17 +44,19 @@ pipeline {
             }
         }
 
-        stage('Build & Unit Tests') {
+        stage('Unit Tests') {
             steps {
-                sh './gradlew :services:circleguard-auth-service:test \
-                              :services:circleguard-identity-service:test \
-                              :services:circleguard-form-service:test \
-                              :services:circleguard-promotion-service:test \
-                              :services:circleguard-notification-service:test \
-                              :services:circleguard-dashboard-service:test \
-                              :services:circleguard-gateway-service:test \
-                              :services:circleguard-file-service:test \
-                    --continue'
+                container('gradle') {
+                    sh './gradlew :services:circleguard-auth-service:test \
+                                  :services:circleguard-identity-service:test \
+                                  :services:circleguard-form-service:test \
+                                  :services:circleguard-promotion-service:test \
+                                  :services:circleguard-notification-service:test \
+                                  :services:circleguard-dashboard-service:test \
+                                  :services:circleguard-gateway-service:test \
+                                  :services:circleguard-file-service:test \
+                        --continue'
+                }
             }
             post {
                 always {
@@ -49,12 +67,14 @@ pipeline {
 
         stage('Integration Tests') {
             steps {
-                sh './gradlew :services:circleguard-form-service:integrationTest \
-                              :services:circleguard-promotion-service:integrationTest \
-                              :services:circleguard-notification-service:integrationTest \
-                              :services:circleguard-identity-service:integrationTest \
-                              :services:circleguard-dashboard-service:integrationTest \
-                    --continue'
+                container('gradle') {
+                    sh './gradlew :services:circleguard-form-service:integrationTest \
+                                  :services:circleguard-promotion-service:integrationTest \
+                                  :services:circleguard-notification-service:integrationTest \
+                                  :services:circleguard-identity-service:integrationTest \
+                                  :services:circleguard-dashboard-service:integrationTest \
+                        --continue'
+                }
             }
             post {
                 always {
@@ -63,53 +83,133 @@ pipeline {
             }
         }
 
-        stage('Build JARs') {
-            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+        stage('SonarQube Analysis') {
             steps {
-                sh './gradlew :services:circleguard-auth-service:bootJar \
-                              :services:circleguard-identity-service:bootJar \
-                              :services:circleguard-form-service:bootJar \
-                              :services:circleguard-promotion-service:bootJar \
-                              :services:circleguard-notification-service:bootJar \
-                              :services:circleguard-dashboard-service:bootJar \
-                              :services:circleguard-gateway-service:bootJar \
-                              :services:circleguard-file-service:bootJar \
-                    --parallel'
+                container('gradle') {
+                    // The org.sonarqube 5.x plugin does NOT add a task dependency on
+                    // compilation, so running `sonar` alone leaves sonar.java.binaries
+                    // empty and analysis aborts with "please provide compiled classes".
+                    // We therefore run `classes` (main compilation) and `jacocoTestReport`
+                    // (produces the coverage XML referenced by sonar.coverage.jacoco.xmlReportPaths)
+                    // in the same invocation before `sonar`. The unit/integration test tasks
+                    // ran in earlier stages within this same workspace, so their exec data is
+                    // reused and the test tasks are UP-TO-DATE here.
+                    withSonarQubeEnv('sonarqube') {
+                        sh './gradlew classes jacocoTestReport sonar -Dsonar.qualitygate.wait=true --info'
+                    }
+                }
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Quality Gate') {
+            // Run on the controller (no container() wrapper): waitForQualityGate polls
+            // the Sonar server until it reports a result, abortPipeline:true converts a
+            // failed gate into a pipeline FAILURE so the slackSend in post fires.
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Build JARs') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
-                script {
-                    def services = [
-                        [name: 'auth-service',         dir: 'circleguard-auth-service'],
-                        [name: 'identity-service',     dir: 'circleguard-identity-service'],
-                        [name: 'form-service',         dir: 'circleguard-form-service'],
-                        [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
-                        [name: 'notification-service', dir: 'circleguard-notification-service'],
-                        [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
-                        [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
-                        [name: 'file-service',         dir: 'circleguard-file-service'],
-                    ]
-                    services.each { svc ->
-                        sh "docker build -f services/${svc.dir}/Dockerfile -t ${REGISTRY}/${svc.name}:stage-${BUILD_NUMBER} ."
-                        sh "docker tag ${REGISTRY}/${svc.name}:stage-${BUILD_NUMBER} ${REGISTRY}/${svc.name}:stage-latest"
+                container('gradle') {
+                    sh './gradlew :services:circleguard-auth-service:bootJar \
+                                  :services:circleguard-identity-service:bootJar \
+                                  :services:circleguard-form-service:bootJar \
+                                  :services:circleguard-promotion-service:bootJar \
+                                  :services:circleguard-notification-service:bootJar \
+                                  :services:circleguard-dashboard-service:bootJar \
+                                  :services:circleguard-gateway-service:bootJar \
+                                  :services:circleguard-file-service:bootJar \
+                        --parallel'
+                }
+            }
+        }
+
+        stage('Build & Push Images (Kaniko)') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+            steps {
+                container('kaniko') {
+                    script {
+                        def services = [
+                            [name: 'auth-service',         dir: 'circleguard-auth-service'],
+                            [name: 'identity-service',     dir: 'circleguard-identity-service'],
+                            [name: 'form-service',         dir: 'circleguard-form-service'],
+                            [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
+                            [name: 'notification-service', dir: 'circleguard-notification-service'],
+                            [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
+                            [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
+                            [name: 'file-service',         dir: 'circleguard-file-service'],
+                        ]
+                        services.each { svc ->
+                            // Kaniko reads /kaniko/.docker/config.json (mounted from the
+                            // `dockerhub-config-json` Secret in the namespace) for the push.
+                            sh """
+                                /kaniko/executor \\
+                                    --context=`pwd` \\
+                                    --dockerfile=services/${svc.dir}/Dockerfile \\
+                                    --destination=${REGISTRY}/${svc.name}:stage-${BUILD_NUMBER} \\
+                                    --destination=${REGISTRY}/${svc.name}:stage-latest \\
+                                    --customPlatform=${TARGET_PLATFORM} \\
+                                    --single-snapshot \\
+                                    --no-push-cache
+                            """
+                        }
                     }
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+            steps {
+                container('trivy') {
+                    script {
+                        def services = ['auth-service','identity-service','form-service','promotion-service',
+                                        'notification-service','dashboard-service','gateway-service','file-service']
+                        sh 'mkdir -p tests/security/reports'
+                        services.each { svc ->
+                            // Trivy reads /kaniko/.docker (mounted in the pod template)
+                            // via the DOCKER_CONFIG env so it can pull from Docker Hub.
+                            // --exit-code 1 blocks the pipeline on CRITICAL/HIGH.
+                            sh """
+                                trivy image \\
+                                    --severity CRITICAL,HIGH \\
+                                    --ignore-unfixed \\
+                                    --exit-code 1 \\
+                                    --no-progress \\
+                                    --format json \\
+                                    --output tests/security/reports/trivy-${svc}.json \\
+                                    --ignorefile .trivyignore \\
+                                    ${REGISTRY}/${svc}:stage-${BUILD_NUMBER}
+                            """
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tests/security/reports/trivy-*.json', allowEmptyArchive: true
                 }
             }
         }
 
         stage('Deploy to Stage') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('kubectl') {
+                    // Pod's serviceAccountName=jenkins; the RBAC in
+                    // jenkins/config/jenkins-account.yaml grants the verbs needed in this ns.
                     sh "kubectl apply -f k8s/namespaces.yaml"
                     sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/deployments/ -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
                     script {
                         ['auth-service', 'identity-service', 'form-service',
-                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
                             sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
                         }
                     }
@@ -119,11 +219,12 @@ pipeline {
 
         stage('Wait for Rollout') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('kubectl') {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
-                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
-                            sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=180s"
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
+                            sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
                         }
                     }
                 }
@@ -132,7 +233,7 @@ pipeline {
 
         stage('E2E Tests') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('kubectl') {
                     sh """
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/auth-service         8180:8180 &
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/identity-service     8083:8083 &
@@ -151,21 +252,66 @@ pipeline {
             }
             post {
                 always {
-                    sh 'pkill -f "kubectl port-forward" || true'
+                    container('kubectl') {
+                        sh 'pkill -f "kubectl port-forward" || true'
+                    }
                     junit 'tests/e2e/build/test-results/test/*.xml'
+                }
+            }
+        }
+
+        stage('OWASP ZAP Baseline') {
+            // Runs ZAP against the gateway service exposed by NodePort (Service
+            // gateway-service:30087). Fails the build on FAIL-level findings; WARNs are
+            // surfaced in the archived report but do not break the pipeline.
+            steps {
+                container('zap') {
+                    sh """
+                        mkdir -p tests/security/reports
+                        export TARGET_URL=http://gateway-service.${K8S_NAMESPACE}.svc.cluster.local:8087
+                        # zap-baseline.py expects writable /zap/wrk
+                        cp -r tests/security/reports /zap/wrk/ || true
+                        zap-baseline.py \\
+                            -t \$TARGET_URL \\
+                            -r zap-report.html \\
+                            -J zap-report.json \\
+                            -w zap-warnings.md \\
+                            -m 1 \\
+                            -I || ZAP_RC=\$?
+                        cp /zap/wrk/zap-report.html      tests/security/reports/ || true
+                        cp /zap/wrk/zap-report.json      tests/security/reports/ || true
+                        cp /zap/wrk/zap-warnings.md      tests/security/reports/ || true
+                        # -I tells ZAP to NOT fail on WARN; we re-fail on rc 1 explicitly.
+                        if [ "\${ZAP_RC:-0}" = "1" ]; then
+                            echo "ZAP detected FAIL-level findings; failing build."
+                            exit 1
+                        fi
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tests/security/reports/zap-report.*', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportDir: 'tests/security/reports',
+                        reportFiles: 'zap-report.html',
+                        reportName: 'OWASP ZAP Baseline Report',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
+                    ])
                 }
             }
         }
 
         stage('Performance Baseline') {
             steps {
-                withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
+                container('python') {
                     sh """
+                        pip install --quiet locust
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/form-service      8086:8086 &
                         kubectl port-forward -n ${K8S_NAMESPACE} svc/dashboard-service 8084:8084 &
                         sleep 3
-                        export PATH="\$PATH:\$HOME/.local/bin"
-                        pip3 show locust >/dev/null 2>&1 || pip3 install locust --quiet --break-system-packages
                         chmod +x jenkins/scripts/run-locust.sh
                         LOCUST_HOST=http://localhost:8086 DASHBOARD_HOST=http://localhost:8084 PROFILE=baseline \\
                         jenkins/scripts/run-locust.sh
@@ -174,7 +320,9 @@ pipeline {
             }
             post {
                 always {
-                    sh 'pkill -f "kubectl port-forward" || true'
+                    container('python') {
+                        sh 'pkill -f "kubectl port-forward" || true'
+                    }
                     publishHTML(target: [
                         reportDir: 'tests/performance/reports',
                         reportFiles: 'locust-report-baseline.html',
@@ -187,13 +335,33 @@ pipeline {
 
     post {
         always {
+            // Pod is destroyed automatically by the kubernetes plugin when the build ends;
+            // cleanWs() just clears the workspace volume inside the pod before tear-down.
             cleanWs()
         }
         success {
-            echo "STAGE pipeline succeeded - Build #${BUILD_NUMBER}"
+            slackSend(
+                color: 'good',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":white_check_mark: *${env.JOB_NAME}* #${env.BUILD_NUMBER} succeeded on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}|view log>"
+            )
         }
         failure {
-            echo "STAGE pipeline failed - Build #${BUILD_NUMBER}"
+            slackSend(
+                color: 'danger',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":x: *${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}console|console log>"
+            )
+            emailext(
+                subject: "[CircleGuard] ${env.JOB_NAME} #${env.BUILD_NUMBER} FAILED",
+                body: """The pipeline ${env.JOB_NAME} build #${env.BUILD_NUMBER} on branch ${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'} failed.
+
+Console: ${env.BUILD_URL}console
+Build: ${env.BUILD_URL}""",
+                recipientProviders: [developers(), culprits()]
+            )
         }
     }
 }

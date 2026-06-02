@@ -33,6 +33,8 @@ public class HealthStatusService {
      * Updates a user's health status and triggers recursive fencing if required.
      * Consolidated into a single transaction with optimized Cypher to meet NFR-1 (<1s target).
      */
+    @Transactional("neo4jTransactionManager")
+    @CacheEvict(cacheNames = "userStatus", allEntries = true)
     public void updateStatus(String anonymousId, String status) {
         updateStatus(anonymousId, status, false);
     }
@@ -45,7 +47,7 @@ public class HealthStatusService {
         if ("ACTIVE".equals(status) && !adminOverride) {
             checkFenceWindow(anonymousId);
         }
-        
+
         var settings = systemSettingsRepository.getSettings()
                 .orElse(com.circleguard.promotion.model.jpa.SystemSettings.builder()
                         .encounterWindowDays(14)
@@ -53,11 +55,10 @@ public class HealthStatusService {
                         .unconfirmedFencingEnabled(true)
                         .autoThresholdSeconds(3600L)
                         .build());
-        
+
         long threshold = System.currentTimeMillis() - ((long)settings.getEncounterWindowDays() * 24 * 60 * 60 * 1000);
 
-        // Robust Multi-Tier High-Confidence Propagation Cypher - Augmented with isValid checks and timing
-        String unifiedQuery = 
+        String unifiedQuery =
             "MATCH (source:User {anonymousId: $id}) " +
             "SET source.status = $status, source.statusUpdatedAt = timestamp() " +
             "WITH source " +
@@ -98,7 +99,7 @@ public class HealthStatusService {
         if (result.isPresent()) {
             Map<String, String> cacheUpdates = new HashMap<>();
             cacheUpdates.put(STATUS_KEY_PREFIX + anonymousId, status);
-            
+
             @SuppressWarnings("unchecked")
             List<Map<String, String>> affected = (List<Map<String, String>>) result.get().get("affectedContacts");
             if (affected != null) {
@@ -114,7 +115,6 @@ public class HealthStatusService {
 
             meterRegistry.counter("circleguard.status.changes", "status", status).increment();
 
-            // Broadcast change
             Map<String, Object> payload = new HashMap<>();
             payload.put("anonymousId", anonymousId);
             payload.put("status", status);
@@ -122,10 +122,8 @@ public class HealthStatusService {
 
             kafkaTemplate.send(TOPIC_STATUS_CHANGED, anonymousId, payload);
 
-            // Story 5.4: Automated Room Reservation Cancellation
             checkAndBroadcastFencedCircles(anonymousId);
 
-            // Story 5.5: Administrative Alerting for Priority Roles
             int affectedCount = (affected != null) ? affected.size() : 0;
             if (affectedCount > 0) {
                 meterRegistry.counter("circleguard.contacts.affected").increment(affectedCount);
@@ -138,7 +136,7 @@ public class HealthStatusService {
                 priorityPayload.put("affectedCount", affectedCount);
                 priorityPayload.put("timestamp", System.currentTimeMillis());
                 priorityPayload.put("eventType", "CONFIRMED".equals(status) ? "CONFIRMED_CASE" : "LARGE_OUTBREAK");
-                
+
                 kafkaTemplate.send("alert.priority", anonymousId, priorityPayload);
             }
         }
@@ -153,7 +151,7 @@ public class HealthStatusService {
             circlePayload.put("locationId", circle.getLocationId());
             circlePayload.put("name", circle.getName());
             circlePayload.put("timestamp", System.currentTimeMillis());
-            
+
             kafkaTemplate.send("circle.fenced", circle.getId().toString(), circlePayload);
         }
     }
@@ -182,10 +180,7 @@ public class HealthStatusService {
         return redisTemplate.opsForValue().get(STATUS_KEY_PREFIX + anonymousId);
     }
 
-    /**
-     * Resolves a user's status to ACTIVE and re-evaluates downstream contacts.
-     * Implements the "Pulse Recovery" algorithm for Story 4.4.
-     */
+    @Transactional("neo4jTransactionManager")
     public void resolveStatus(String anonymousId) {
         resolveStatus(anonymousId, false);
     }
@@ -198,14 +193,11 @@ public class HealthStatusService {
             checkFenceWindow(anonymousId);
         }
 
-        // 1. Resolve source
         neo4jClient.query("MATCH (u:User {anonymousId: $id}) SET u.status = 'ACTIVE', u.statusUpdatedAt = timestamp()")
                 .bind(anonymousId).to("id")
                 .run();
 
-        // 2. Refined Two-Hop Pulse Recovery
-        // Phase 1: Release direct SUSPECT neighbors that have no other CONFIRMED paths
-        String phase1Query = 
+        String phase1Query =
             "MATCH (source:User {anonymousId: $id}) " +
             "OPTIONAL MATCH (source)-[:ENCOUNTERED|MEMBER_OF]-(target:User) " +
             "WHERE target.status = 'SUSPECT' " +
@@ -227,8 +219,7 @@ public class HealthStatusService {
             if (ids != null) releasedL1.addAll(ids);
         }
 
-        // Phase 2: Release L2 PROBABLE neighbors that have no other risk paths (CONFIRMED or remaining SUSPECT)
-        String phase2Query = 
+        String phase2Query =
             "MATCH (l1:User) WHERE l1.anonymousId IN $l1Ids " +
             "OPTIONAL MATCH (l1)-[:ENCOUNTERED|MEMBER_OF]-(target:User) " +
             "WHERE target.status = 'PROBABLE' " +
@@ -249,12 +240,10 @@ public class HealthStatusService {
         Map<String, String> cacheUpdates = new HashMap<>();
         cacheUpdates.put(STATUS_KEY_PREFIX + anonymousId, "ACTIVE");
 
-        // Add phase 1 released IDs
         releasedL1.forEach(id -> {
             if (id != null) cacheUpdates.put(STATUS_KEY_PREFIX + id, "ACTIVE");
         });
 
-        // Add phase 2 released IDs
         if (phase2Result.isPresent()) {
             @SuppressWarnings("unchecked")
             List<String> releasedIds = (List<String>) phase2Result.get().get("releasedIds");
@@ -275,33 +264,29 @@ public class HealthStatusService {
         kafkaTemplate.send(TOPIC_STATUS_CHANGED, anonymousId, payload);
     }
 
-    /**
-     * Promotion to RECOVERED (Immunity Window)
-     */
     @Transactional("neo4jTransactionManager")
     public void promoteToRecovered(String anonymousId) {
         resolveStatus(anonymousId);
-        // Note: resolveStatus sets to ACTIVE first, then we update to RECOVERED
         neo4jClient.query("MATCH (u:User {anonymousId: $id}) SET u.status = 'RECOVERED'")
                 .bind(anonymousId).to("id").run();
-        
-        // Immunize in Redis for 30 days
+
         redisTemplate.opsForValue().set(STATUS_KEY_PREFIX + anonymousId, "RECOVERED");
         redisTemplate.expire(STATUS_KEY_PREFIX + anonymousId, java.time.Duration.ofDays(30));
     }
+
     private void checkFenceWindow(String anonymousId) {
         var userOpt = userNodeRepository.findById(anonymousId);
         if (userOpt.isPresent()) {
             var user = userOpt.get();
-            if (("SUSPECT".equals(user.getStatus()) || "PROBABLE".equals(user.getStatus())) 
+            if (("SUSPECT".equals(user.getStatus()) || "PROBABLE".equals(user.getStatus()))
                 && user.getStatusUpdatedAt() != null) {
-                
+
                 var settings = systemSettingsRepository.getSettings()
                         .orElseThrow(() -> new IllegalStateException("System Settings not initialized"));
-                
+
                 long fenceDurationMs = (long) settings.getMandatoryFenceDays() * 24 * 60 * 60 * 1000;
                 long elapsed = System.currentTimeMillis() - user.getStatusUpdatedAt();
-                
+
                 if (elapsed < fenceDurationMs) {
                     long remainingDays = (fenceDurationMs - elapsed) / (24 * 60 * 60 * 1000);
                     throw new FenceException("Cannot transition to ACTIVE. User is in mandatory fence window for " + remainingDays + " more days.");

@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Date;
 import java.util.Map;
@@ -55,10 +56,12 @@ public class PromotionClient {
     @CircuitBreaker(name = CB_NAME, fallbackMethod = "fallbackGetHealthStatsByDepartment")
     @SuppressWarnings("unchecked")
     public Map<String, Object> getHealthStatsByDepartment(String department) {
-        return restTemplate.getForObject(
-                promotionServiceUrl + "/api/v1/health-status/stats/department/" + department,
-                Map.class
-        );
+        String url = UriComponentsBuilder
+                .fromHttpUrl(promotionServiceUrl)
+                .path("/api/v1/health-status/stats/department/{department}")
+                .build(department)
+                .toString();
+        return restTemplate.getForObject(url, Map.class);
     }
 
     /**

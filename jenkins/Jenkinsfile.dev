@@ -1,20 +1,56 @@
+// CircleGuard dev pipeline.
+//
+// Runs on a local Jenkins agent labelled 'local-kaniko' (registered manually on the
+// dev workstation: Git Bash / WSL Ubuntu + Docker Desktop). NEVER schedules on AKS
+// (dev does not burn Azure credit).
+//
+// Image build:
+//   - Uses Kaniko in a one-shot Docker container instead of `docker build`.
+//   - No layers persist on the host.
+//   - Targets linux/amd64: the dev agent is a local amd64 workstation and Kaniko
+//     executes Dockerfile RUN steps natively (no QEMU), so the target platform MUST
+//     match the host CPU or the unpacked rootfs /bin/sh fails with "exec format error".
+//     The arm64 images consumed by AKS (Standard_B*pls_v2) are produced by the stage
+//     and master pipelines, which build natively inside arm64 AKS pods.
+//
+// Deploy/Rollout/Smoke stages are kept and target whatever `K8S_API_SERVER` resolves
+// to: a local kind cluster for purely-local validation, or AKS-dev only when it is
+// already powered on for another reason. They are NOT a justification to start AKS.
 pipeline {
-    agent any
+    agent { label 'local-kaniko' }
 
     options {
-        timeout(time: 30, unit: 'MINUTES')
+        timeout(time: 90, unit: 'MINUTES')
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
     }
 
     parameters {
-        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Docker image build (reuse existing images)')
+        booleanParam(name: 'SKIP_DOCKER_BUILD', defaultValue: false, description: 'Skip JAR compilation and Kaniko image build (reuse existing tags)')
+        booleanParam(name: 'SKIP_DEPLOY',       defaultValue: false, description: 'Skip Deploy/Rollout/Smoke stages (build+push only)')
     }
 
     environment {
-        REGISTRY        = 'circleguard'
+        REGISTRY        = 'docker.io/circleguard'
         K8S_NAMESPACE   = 'circleguard-dev'
+        KANIKO_IMAGE    = 'gcr.io/kaniko-project/executor:debug'
+        TARGET_PLATFORM = 'linux/amd64'
+        // Testcontainers (PostgreSQL + MockServer containers used in integration tests)
+        // requires the Docker socket. Docker Desktop exposes it at /var/run/docker.sock
+        // inside any WSL2 distro where WSL Integration is enabled:
+        //   Docker Desktop → Settings → Resources → WSL Integration → tick Ubuntu distro.
+        DOCKER_HOST                  = 'unix:///var/run/docker.sock'
+        // docker-java 3.3.x defaults to API 1.41; Docker Desktop 4.61 / Engine 29.x
+        // enforces a minimum of 1.44 and rejects anything below. Pinning to 1.44 here
+        // puts it in the shell environment so the Gradle daemon and forked test JVMs
+        // all inherit it. The Gradle integrationTest task also passes it as an env var
+        // and as a JVM system property (-DDOCKER_API_VERSION) for belt-and-suspenders.
+        DOCKER_API_VERSION           = '1.44'
+        // Ryuk (Testcontainers resource reaper) can fail in restricted CI environments.
+        // Disabling it avoids privilege errors; leftover containers are removed by the
+        // `docker system prune` step at the end of Build & Push Images.
+        TESTCONTAINERS_RYUK_DISABLED = 'true'
     }
 
     stages {
@@ -28,7 +64,7 @@ pipeline {
             }
         }
 
-        stage('Build & Unit Tests') {
+        stage('Unit Tests') {
             steps {
                 sh './gradlew :services:circleguard-auth-service:test \
                               :services:circleguard-identity-service:test \
@@ -49,16 +85,54 @@ pipeline {
 
         stage('Integration Tests') {
             steps {
+                // --no-daemon: forked test JVMs are children of the current shell process
+                // (which has the docker group via the Jenkins agent session) rather than
+                // children of a long-lived Gradle daemon that may have been started before
+                // the docker group was assigned. This prevents EACCES on /var/run/docker.sock
+                // inside the test JVM even when the shell itself can reach the socket fine.
+                // --stop before running ensures no stale daemon with wrong groups is reused.
+                sh './gradlew --stop'
                 sh './gradlew :services:circleguard-form-service:integrationTest \
                               :services:circleguard-promotion-service:integrationTest \
                               :services:circleguard-notification-service:integrationTest \
                               :services:circleguard-identity-service:integrationTest \
                               :services:circleguard-dashboard-service:integrationTest \
-                    --continue'
+                    --no-daemon --continue'
             }
             post {
                 always {
                     junit '**/build/test-results/integrationTest/*.xml'
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                // withSonarQubeEnv injects SONAR_HOST_URL + SONAR_AUTH_TOKEN; the
+                // gradle plugin (id 'org.sonarqube' in root build.gradle.kts) picks them
+                // up automatically.
+                //
+                // The org.sonarqube 5.x plugin does NOT add a task dependency on
+                // compilation, so running `sonar` alone leaves sonar.java.binaries empty
+                // and analysis aborts with "please provide compiled classes". We therefore
+                // run the main `classes` compilation and `jacocoTestReport` (which produces
+                // the coverage XML referenced by sonar.coverage.jacoco.xmlReportPaths) in
+                // the same invocation, before `sonar`. The unit/integration test tasks ran
+                // in earlier stages within this same workspace, so their exec data is reused
+                // and the test tasks are UP-TO-DATE here.
+                withSonarQubeEnv('sonarqube') {
+                    sh './gradlew classes jacocoTestReport sonar -Dsonar.qualitygate.wait=true --info'
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            // Blocks the pipeline. If the SonarQube quality gate fails, abortPipeline:true
+            // sends `error` upwards and the build is marked FAILURE - which triggers the
+            // slackSend in the post block below.
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
@@ -78,51 +152,113 @@ pipeline {
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Build & Push Images (Kaniko)') {
+            when { not { expression { params.SKIP_DOCKER_BUILD } } }
+            steps {
+                withCredentials([file(credentialsId: 'dockerhub-config-json', variable: 'DOCKERHUB_CONFIG')]) {
+                    script {
+                        def services = [
+                            [name: 'auth-service',         dir: 'circleguard-auth-service'],
+                            [name: 'identity-service',     dir: 'circleguard-identity-service'],
+                            [name: 'form-service',         dir: 'circleguard-form-service'],
+                            [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
+                            [name: 'notification-service', dir: 'circleguard-notification-service'],
+                            [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
+                            [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
+                            [name: 'file-service',         dir: 'circleguard-file-service'],
+                        ]
+                        services.each { svc ->
+                            // Each Kaniko invocation is a one-shot container: no daemon, no
+                            // local layer cache, no images left in `docker images` afterwards.
+                            sh """
+                                docker run --rm \\
+                                    -v \$(pwd):/workspace \\
+                                    -v \$DOCKERHUB_CONFIG:/kaniko/.docker/config.json:ro \\
+                                    ${KANIKO_IMAGE} \\
+                                    --context=/workspace \\
+                                    --dockerfile=services/${svc.dir}/Dockerfile \\
+                                    --destination=${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} \\
+                                    --destination=${REGISTRY}/${svc.name}:dev-latest \\
+                                    --customPlatform=${TARGET_PLATFORM} \\
+                                    --single-snapshot \\
+                                    --no-push-cache
+                            """
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    // Belt-and-suspenders: even though Kaniko leaves no layers, prune any
+                    // intermediate buffers from previous unrelated builds.
+                    sh 'docker system prune -af --filter "until=1h" || true'
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
             when { not { expression { params.SKIP_DOCKER_BUILD } } }
             steps {
                 script {
-                    def serviceList = [
-                        [name: 'auth-service',         dir: 'circleguard-auth-service'],
-                        [name: 'identity-service',     dir: 'circleguard-identity-service'],
-                        [name: 'form-service',         dir: 'circleguard-form-service'],
-                        [name: 'promotion-service',    dir: 'circleguard-promotion-service'],
-                        [name: 'notification-service', dir: 'circleguard-notification-service'],
-                        [name: 'dashboard-service',    dir: 'circleguard-dashboard-service'],
-                        [name: 'gateway-service',      dir: 'circleguard-gateway-service'],
-                        [name: 'file-service',         dir: 'circleguard-file-service'],
-                    ]
-                    serviceList.each { svc ->
-                        sh "docker build -f services/${svc.dir}/Dockerfile -t ${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} ."
-                        sh "docker tag ${REGISTRY}/${svc.name}:dev-${BUILD_NUMBER} ${REGISTRY}/${svc.name}:dev-latest"
+                    def services = ['auth-service','identity-service','form-service','promotion-service',
+                                    'notification-service','dashboard-service','gateway-service','file-service']
+                    sh 'mkdir -p tests/security/reports'
+                    services.each { svc ->
+                        // --exit-code 1 on CRITICAL/HIGH (gated by .trivyignore for known FPs).
+                        // --ignore-unfixed skips CVEs with no available patch.
+                        sh """
+                            docker run --rm \\
+                                -v //var/run/docker.sock:/var/run/docker.sock \\
+                                -v \$(pwd)/.trivyignore:/.trivyignore:ro \\
+                                -v \$(pwd)/tests/security/reports:/reports \\
+                                aquasec/trivy:latest image \\
+                                    --severity CRITICAL,HIGH \\
+                                    --ignore-unfixed \\
+                                    --exit-code 1 \\
+                                    --no-progress \\
+                                    --format json \\
+                                    --output /reports/trivy-${svc}.json \\
+                                    ${REGISTRY}/${svc}:dev-${BUILD_NUMBER}
+                        """
                     }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'tests/security/reports/trivy-*.json', allowEmptyArchive: true
                 }
             }
         }
 
         stage('Deploy to Dev') {
+            when { not { expression { params.SKIP_DEPLOY } } }
             steps {
+                // Targets whatever K8S_API_SERVER points at (kind for local-only validation
+                // or AKS-dev when already powered on). Does NOT start AKS.
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     sh "kubectl apply -f k8s/namespaces.yaml"
                     sh "kubectl apply -f k8s/configmap.yaml -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/deployments/ -n ${K8S_NAMESPACE}"
                     sh "kubectl apply -f k8s/services/ -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/auth-service         auth-service=${REGISTRY}/auth-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/identity-service     identity-service=${REGISTRY}/identity-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/form-service         form-service=${REGISTRY}/form-service:${env.DEPLOY_TAG}         -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/promotion-service    promotion-service=${REGISTRY}/promotion-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/notification-service notification-service=${REGISTRY}/notification-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/dashboard-service    dashboard-service=${REGISTRY}/dashboard-service:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                    script {
+                        ['auth-service', 'identity-service', 'form-service',
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
+                            sh "kubectl set image deployment/${svc} ${svc}=${REGISTRY}/${svc}:${env.DEPLOY_TAG} -n ${K8S_NAMESPACE}"
+                        }
+                    }
                 }
             }
         }
 
         stage('Wait for Rollout') {
+            when { not { expression { params.SKIP_DEPLOY } } }
             steps {
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     script {
                         ['auth-service', 'identity-service', 'form-service',
-                         'promotion-service', 'notification-service', 'dashboard-service'].each { svc ->
+                         'promotion-service', 'notification-service', 'dashboard-service',
+                         'gateway-service', 'file-service'].each { svc ->
                             sh "kubectl rollout status deployment/${svc} -n ${K8S_NAMESPACE} --timeout=300s"
                         }
                     }
@@ -131,6 +267,7 @@ pipeline {
         }
 
         stage('Smoke Tests') {
+            when { not { expression { params.SKIP_DEPLOY } } }
             steps {
                 withKubeConfig(credentialsId: 'k8s-sa-token', serverUrl: env.K8S_API_SERVER) {
                     script {
@@ -141,6 +278,8 @@ pipeline {
                             [svc: 'promotion-service',    port: '8088'],
                             [svc: 'notification-service', port: '8082'],
                             [svc: 'dashboard-service',    port: '8084'],
+                            [svc: 'gateway-service',      port: '8087'],
+                            [svc: 'file-service',         port: '8085'],
                         ]
                         checks.each { c ->
                             def health = sh(
@@ -164,10 +303,38 @@ pipeline {
             cleanWs()
         }
         success {
-            echo "DEV pipeline succeeded - Build #${BUILD_NUMBER}"
+            // slackSend silently no-ops if the slack plugin is not installed or the
+            // webhook credential is missing - safe to leave on in environments without
+            // notification wiring.
+            slackSend(
+                color: 'good',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":white_check_mark: *${env.JOB_NAME}* #${env.BUILD_NUMBER} succeeded on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}|view log>"
+            )
         }
         failure {
-            echo "DEV pipeline failed - Build #${BUILD_NUMBER}"
+            // Real Slack notification via Incoming Webhook. Credential `slack-webhook`
+            // is configured in jenkins/config/casc.yaml; the message links to the
+            // failing build log so on-call can jump straight to it.
+            slackSend(
+                color: 'danger',
+                channel: '#ci-alerts',
+                tokenCredentialId: 'slack-webhook',
+                message: ":x: *${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED on `${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'}` <${env.BUILD_URL}console|console log>"
+            )
+            // Email fallback for ops that prefer it. Recipient is the commit author.
+            emailext(
+                subject: "[CircleGuard] ${env.JOB_NAME} #${env.BUILD_NUMBER} FAILED",
+                body: """The pipeline ${env.JOB_NAME} build #${env.BUILD_NUMBER} on branch ${env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'unknown'} failed.
+
+Console: ${env.BUILD_URL}console
+Build: ${env.BUILD_URL}""",
+                // Static fallback ensures at least one recipient even when git author
+                // email is not mapped to a Jenkins user (common in local/dev setups).
+                to: 'juancamuba.swe@gmail.com',
+                recipientProviders: [developers(), culprits()]
+            )
         }
     }
 }

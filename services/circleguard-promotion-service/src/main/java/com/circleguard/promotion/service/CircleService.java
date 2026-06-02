@@ -6,8 +6,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.security.SecureRandom;
 import java.util.List;
-import java.util.Random;
 
 @Service
 @RequiredArgsConstructor
@@ -17,6 +17,7 @@ public class CircleService {
     private final CircleNodeRepository circleRepository;
     private final HealthStatusService healthStatusService;
     private static final String CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     @Transactional("neo4jTransactionManager")
     public void toggleCircleValidity(Long circleId) {
@@ -88,13 +89,12 @@ public class CircleService {
     }
 
     private String generateUniqueInviteCode() {
-        Random random = new Random();
         String code;
         do {
             StringBuilder sb = new StringBuilder();
             sb.append("MESH-");
             for (int i = 0; i < 4; i++) {
-                sb.append(CHARS.charAt(random.nextInt(CHARS.length())));
+                sb.append(CHARS.charAt(RANDOM.nextInt(CHARS.length())));
             }
             code = sb.toString();
         } while (circleRepository.existsByInviteCode(code));

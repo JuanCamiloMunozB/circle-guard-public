@@ -62,16 +62,11 @@ public class AnalyticsService {
      * Queries the local dashboard DB for event history.
      */
     public List<Map<String, Object>> getTimeSeries(String period, int limit) {
-        // period: "hourly" or "daily"
-        String truncation = "daily".equals(period) ? "day" : "hour";
-        
-        String query = "SELECT date_trunc('" + truncation + "', event_time) as bucket, " +
-                       "status, count(*) as total " +
-                       "FROM status_events " +
-                       "GROUP BY bucket, status " +
-                       "ORDER BY bucket DESC " +
-                       "LIMIT ?";
-        
+        // The bucket granularity is selected from a fixed, internal allow-list of
+        // two fully pre-built constant queries. No user-supplied text is ever
+        // concatenated into the SQL string, so there is no injection surface.
+        String query = "daily".equals(period) ? TIME_SERIES_DAILY_QUERY : TIME_SERIES_HOURLY_QUERY;
+
         try {
             return jdbc.queryForList(query, limit);
         } catch (Exception e) {
@@ -80,11 +75,26 @@ public class AnalyticsService {
         }
     }
 
+    private static final String TIME_SERIES_HOURLY_QUERY =
+            "SELECT date_trunc('hour', event_time) as bucket, " +
+            "status, count(*) as total " +
+            "FROM status_events " +
+            "GROUP BY bucket, status " +
+            "ORDER BY bucket DESC " +
+            "LIMIT ?";
+
+    private static final String TIME_SERIES_DAILY_QUERY =
+            "SELECT date_trunc('day', event_time) as bucket, " +
+            "status, count(*) as total " +
+            "FROM status_events " +
+            "GROUP BY bucket, status " +
+            "ORDER BY bucket DESC " +
+            "LIMIT ?";
+
     private List<Map<String, Object>> generateMockTimeSeries(int limit) {
         List<Map<String, Object>> series = new ArrayList<>();
         long now = System.currentTimeMillis();
         String[] statuses = {"ACTIVE", "SUSPECT", "PROBABLE", "CONFIRMED"};
-        Random rng = new Random(42);
 
         for (int i = 0; i < Math.min(limit, 24); i++) {
             for (String status : statuses) {
@@ -92,7 +102,9 @@ public class AnalyticsService {
                 point.put("bucket", new Date(now - (long) i * 3600_000));
                 point.put("status", status);
                 int base = "ACTIVE".equals(status) ? 200 : "SUSPECT".equals(status) ? 30 : 10;
-                point.put("total", base + rng.nextInt(20));
+                // Deterministic, non-security variation for illustrative PoC data.
+                int variation = (i * 7 + status.length() * 3) % 20;
+                point.put("total", base + variation);
                 series.add(point);
             }
         }

@@ -1,9 +1,35 @@
 plugins {
-    id("org.springframework.boot") version "3.2.4" apply false
+    id("org.springframework.boot") version "3.5.14" apply false
     id("io.spring.dependency-management") version "1.1.4" apply false
     kotlin("jvm") version "1.9.24" apply false
     kotlin("plugin.spring") version "1.9.24" apply false
     kotlin("plugin.jpa") version "1.9.24" apply false
+    // Aggregates JaCoCo XML reports of every subproject and uploads them to SonarQube.
+    // Triggered from Jenkins via `./gradlew sonar` inside `withSonarQubeEnv('sonarqube')`.
+    id("org.sonarqube") version "5.0.0.4638"
+}
+
+sonar {
+    properties {
+        property("sonar.organization", "juancamuba")
+        property("sonar.projectKey", "JuanCamiloMunozB_circle-guard-public")
+        property("sonar.projectName", "CircleGuard")
+        property("sonar.sourceEncoding", "UTF-8")
+        // Aggregated coverage report paths (one per service module).
+        property(
+            "sonar.coverage.jacoco.xmlReportPaths",
+            subprojects.joinToString(",") { sp ->
+                "${sp.projectDir}/build/reports/jacoco/test/jacocoTestReport.xml"
+            }
+        )
+        // Same exclusions applied to JaCoCo: keep DTOs, model, config, Application
+        // out of the coverage denominator so the headline number reflects real
+        // business code.
+        property(
+            "sonar.coverage.exclusions",
+            "**/*Application.java,**/dto/**,**/model/**,**/config/**,**/event/**,**/exception/**,**/SecurityConfig.java"
+        )
+    }
 }
 
 allprojects {
@@ -30,11 +56,30 @@ subprojects {
         toolVersion = "0.8.11"
     }
 
+    // Override Spring Boot BOM managed versions to pull CVE-patched releases while
+    // staying on the 3.5.x line. Read by io.spring.dependency-management as BOM
+    // property overrides:
+    //   tomcat 10.1.55     -> fixes CVE-2026-41293/43512/43515/41284/42498/43513 and
+    //                         CVE-2026-24734/24880/34483/34487 (3.5.14 BOM ships an
+    //                         older 10.1.x; pin forward to the patched line).
+    //   postgresql 42.7.11 -> fixes CVE-2026-42198 SCRAM client DoS.
+    //   netty 4.1.133.Final -> fixes CVE-2026-42583 in netty-codec pulled by
+    //                         redis-authx-core under promotion-service.
+    //   commons-io 2.14.0  -> fixes CVE-2024-47554 pulled by Twilio under
+    //                         notification-service.
+    //   kotlin 1.9.24      -> pin to the Kotlin Gradle plugin version so stdlib/reflect do
+    //                         not skew against the 2.x the BOM would otherwise force.
+    extra["tomcat.version"] = "10.1.55"
+    extra["postgresql.version"] = "42.7.11"
+    extra["netty.version"] = "4.1.133.Final"
+    extra["kotlin.version"] = "1.9.24"
+
     dependencies {
-        "implementation"(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
-        "testImplementation"(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
-        "annotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
-        "testAnnotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.2.4"))
+        "implementation"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "testImplementation"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "annotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "testAnnotationProcessor"(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+        "implementation"("commons-io:commons-io:2.14.0")
         "compileOnly"("org.projectlombok:lombok")
         "annotationProcessor"("org.projectlombok:lombok")
         "testCompileOnly"("org.projectlombok:lombok")
@@ -71,6 +116,33 @@ subprojects {
         useJUnitPlatform {
             includeTags("integration")
         }
+        // Explicitly propagate Docker env vars to the forked test JVM.
+        // Testcontainers (identity-service, dashboard-service) needs the Docker daemon.
+        // Gradle daemons are long-lived and may predate the Jenkins environment block,
+        // so we hardcode values here to guarantee the test fork always has them.
+        //
+        // DOCKER_HOST  — points Testcontainers' EnvironmentAndSystemPropertyClientProviderStrategy
+        //                at the WSL2 socket mounted into the Jenkins container.
+        // DOCKER_API_VERSION — docker-java 3.3.3 (Testcontainers 1.19.x) defaults to
+        //                API 1.41, but Docker Desktop 4.61 / Engine 29.x enforces a
+        //                minimum of 1.44 and rejects anything below with:
+        //                "client version 1.41 is too old. Minimum supported API version
+        //                is 1.44". Pinning to 1.44 satisfies the daemon minimum while
+        //                remaining fully compatible with the operations Testcontainers
+        //                uses (create/start/stop/remove container, pull image).
+        // TESTCONTAINERS_RYUK_DISABLED — Ryuk needs to bind-mount the socket itself,
+        //                which requires extra privileges; disabling avoids the error.
+        environment("DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock")
+        environment("DOCKER_API_VERSION", System.getenv("DOCKER_API_VERSION") ?: "1.44")
+        environment("TESTCONTAINERS_RYUK_DISABLED", System.getenv("TESTCONTAINERS_RYUK_DISABLED") ?: "true")
+        // Also pin the API version via docker-java's JVM system property. The correct
+        // property key is "api.version" (DefaultDockerClientConfig.API_VERSION) — NOT
+        // "DOCKER_API_VERSION", which is only the *environment* variable name. docker-java's
+        // createDefaultConfigBuilder() seeds its Properties from System.getProperties() using
+        // the "api.version" key; without a resolved version it falls back to API 1.32, which
+        // Docker Engine 29.x rejects (HTTP 400, "client version ... too old"). Setting the
+        // correct key forces the strategy-detection ping onto /v1.44.
+        systemProperty("api.version", System.getenv("DOCKER_API_VERSION") ?: "1.44")
     }
 
     // --- JaCoCo coverage report ---
