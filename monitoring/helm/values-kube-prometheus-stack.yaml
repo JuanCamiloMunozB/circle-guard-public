@@ -30,7 +30,6 @@ grafana:
         - name: Prometheus
           type: prometheus
           url: http://prometheus-kube-prometheus-prometheus:9090
-          isDefault: true
         - name: Loki
           type: loki
           url: http://loki:3100
@@ -109,7 +108,7 @@ alertmanager:
 kubeStateMetrics:
   enabled: true
 nodeExporter:
-  enabled: true
+  enabled: false   # Docker Desktop/Windows: host paths incompatible
 kubeApiServer:
   enabled: false
 kubeControllerManager:
