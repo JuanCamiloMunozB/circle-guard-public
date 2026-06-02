@@ -3,6 +3,7 @@ package com.circleguard.gateway.integration;
 import com.circleguard.gateway.service.QrValidationService;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -59,7 +60,7 @@ class GatewayRedisIntegrationTest {
         redisTemplate = new StringRedisTemplate(factory);
         redisTemplate.afterPropertiesSet();
 
-        service = new QrValidationService(redisTemplate);
+        service = new QrValidationService(redisTemplate, new SimpleMeterRegistry());
         ReflectionTestUtils.setField(service, "qrSecret", SECRET);
     }
 
