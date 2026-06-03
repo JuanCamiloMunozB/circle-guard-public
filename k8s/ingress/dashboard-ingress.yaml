@@ -1,0 +1,29 @@
+# Ingress with TLS for dashboard-service (geospatial analytics).
+# Apply per namespace after nginx-ingress and cert-manager are installed:
+#   kubectl apply -f k8s/ingress/dashboard-ingress.yaml -n circleguard-dev
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: circleguard-ca-issuer
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - dashboard.circleguard.local
+      secretName: dashboard-tls
+  rules:
+    - host: dashboard.circleguard.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard-service
+                port:
+                  number: 8084

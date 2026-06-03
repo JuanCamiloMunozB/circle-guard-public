@@ -18,6 +18,7 @@ spec:
         prometheus.io/port: "8084"
         prometheus.io/path: /actuator/prometheus
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: dashboard-service
           image: circleguard/dashboard-service:latest

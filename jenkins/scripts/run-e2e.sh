@@ -23,7 +23,10 @@ DASHBOARD_PORT="${DASHBOARD_PORT:-8084}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 cd "$REPO_ROOT"
-./gradlew :tests:e2e:test \
+# --rerun-tasks: the workspace is wiped between CI builds but the Gradle cache on the
+# agent persists, so :tests:e2e:test resolves UP-TO-DATE and the suite never actually
+# runs against the live environment. Force it to execute every time.
+./gradlew :tests:e2e:test --rerun-tasks \
     -Dbase.url="$BASE_URL" \
     -Dauth.port="$AUTH_PORT" \
     -Didentity.port="$IDENTITY_PORT" \

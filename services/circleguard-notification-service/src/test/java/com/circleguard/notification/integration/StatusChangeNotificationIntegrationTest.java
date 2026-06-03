@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Order;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.MessageListenerContainer;
@@ -80,28 +80,25 @@ class StatusChangeNotificationIntegrationTest {
     @Autowired
     private KafkaListenerEndpointRegistry registry;
 
-    @MockBean
+    @MockitoBean
     private NotificationDispatcher dispatcher;
 
-    @MockBean
+    @MockitoBean
     private LmsService lmsService;
 
-    @MockBean
+    @MockitoBean
     private org.springframework.mail.javamail.JavaMailSender mailSender;
 
-    @MockBean
-    private org.springframework.web.reactive.function.client.WebClient.Builder webClientBuilder;
-
-    @MockBean
+    @MockitoBean
     private com.circleguard.notification.service.EmailService emailService;
 
-    @MockBean
+    @MockitoBean
     private com.circleguard.notification.service.SmsService smsService;
 
-    @MockBean
+    @MockitoBean
     private com.circleguard.notification.service.PushService pushService;
 
-    // Spring's MockitoTestExecutionListener resets @MockBean stubs automatically,
+    // Spring's MockitoTestExecutionListener resets @MockitoBean stubs automatically,
     // but Kafka may deliver a lingering message from the previous test AFTER the
     // reset fires. Explicit reset here acts as a second safety net.
     @AfterEach

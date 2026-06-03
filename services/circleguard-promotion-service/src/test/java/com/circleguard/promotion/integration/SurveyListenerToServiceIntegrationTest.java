@@ -42,7 +42,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer",
         "spring.kafka.producer.value-serializer=org.springframework.kafka.support.serializer.JsonSerializer",
-        "spring.main.allow-bean-definition-overriding=true"
+        "spring.main.allow-bean-definition-overriding=true",
+        // application-test.yml disables auto-startup to prevent listeners from connecting
+        // to localhost:9092 in unit tests. Re-enable here since embedded Kafka is running.
+        "spring.kafka.listener.auto-startup=true"
 })
 @EmbeddedKafka(partitions = 1, topics = {
         "survey.submitted",
@@ -121,8 +124,13 @@ class SurveyListenerToServiceIntegrationTest {
                 "hasSymptoms", true,
                 "timestamp", System.currentTimeMillis()
         ));
+        // send() only buffers the record; under CI load the producer can hold it
+        // long enough that the 15s poll window expires before the listener ever sees
+        // the message. flush() forces the record onto the broker before we start
+        // polling so the await window measures listener+Neo4j latency, not send latency.
+        kafkaTemplate.flush();
 
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             Optional<Map<String, Object>> row = neo4jClient
                     .query("MATCH (u:User {anonymousId: 'int-user-001'}) RETURN u.status AS status")
                     .fetch().one();
@@ -144,8 +152,13 @@ class SurveyListenerToServiceIntegrationTest {
                 "hasSymptoms", false,
                 "timestamp", System.currentTimeMillis()
         ));
+        // Force delivery before the (deliberately short) no-change window so this test
+        // verifies the listener actually processed a no-symptoms event and left the
+        // status untouched — rather than passing only because the message was still
+        // sitting unsent in the producer buffer.
+        kafkaTemplate.flush();
 
-        await().pollDelay(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(6)).untilAsserted(() -> {
+        await().pollDelay(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(8)).untilAsserted(() -> {
             Optional<Map<String, Object>> row = neo4jClient
                     .query("MATCH (u:User {anonymousId: 'int-user-002'}) RETURN u.status AS status")
                     .fetch().one();

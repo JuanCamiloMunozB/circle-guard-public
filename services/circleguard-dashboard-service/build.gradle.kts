@@ -19,12 +19,10 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
     implementation("org.flywaydb:flyway-core")
+    implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("com.h2database:h2")
 
-    testImplementation("org.testcontainers:testcontainers")
-    testImplementation("org.testcontainers:junit-jupiter")
-    testImplementation("org.testcontainers:mockserver")
-    testImplementation("org.mock-server:mockserver-client-java:5.15.0")
+    testImplementation("org.wiremock:wiremock-standalone:3.3.1")
 }

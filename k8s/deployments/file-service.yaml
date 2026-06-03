@@ -18,6 +18,7 @@ spec:
         prometheus.io/port: "8085"
         prometheus.io/path: /actuator/prometheus
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: file-service
           image: circleguard/file-service:latest
@@ -29,6 +30,13 @@ spec:
                 name: circleguard-config
             - secretRef:
                 name: circleguard-secrets
+          env:
+            # The image runs as the non-root `spring` user with WORKDIR /app, which
+            # it cannot write to. The default storage root ("uploads") resolves to
+            # /app/uploads and fails with AccessDeniedException at startup. Point it
+            # at /tmp (world-writable) so FileStorageService can create the directory.
+            - name: FILE_STORAGE_ROOT
+              value: /tmp/uploads
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness

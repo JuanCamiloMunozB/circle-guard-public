@@ -18,6 +18,7 @@ spec:
         prometheus.io/port: "8180"
         prometheus.io/path: /actuator/prometheus
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: auth-service
           image: circleguard/auth-service:latest
