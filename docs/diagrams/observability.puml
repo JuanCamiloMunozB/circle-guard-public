@@ -1,0 +1,86 @@
+@startuml observability
+!theme plain
+skinparam defaultFontSize 11
+skinparam componentStyle rectangle
+
+title CircleGuard — Observability Stack
+
+package "circleguard-dev / stage / master" {
+  component "auth-service\n:8180" as auth
+  component "identity-service\n:8083" as identity
+  component "form-service\n:8086" as form
+  component "promotion-service\n:8088" as promo
+  component "dashboard-service\n:8084" as dash
+  component "notification-service\n:8082" as notif
+  component "gateway-service\n:8087" as gateway
+  component "file-service\n:8085" as file
+
+  note right of auth
+    /actuator/prometheus
+    /actuator/health
+    OTLP traces → Jaeger:4318
+  end note
+}
+
+package "monitoring namespace" {
+  component "Prometheus" as prom
+  component "AlertManager" as alert
+  component "Grafana" as grafana
+  component "Loki" as loki
+  component "Promtail" as promtail
+  component "Jaeger\nall-in-one" as jaeger
+}
+
+' Metrics scraping
+prom --> auth      : scrape /actuator/prometheus\n(annotation-based)
+prom --> identity  : scrape
+prom --> form      : scrape
+prom --> promo     : scrape
+prom --> dash      : scrape
+prom --> notif     : scrape
+prom --> gateway   : scrape
+prom --> file      : scrape
+
+' Alerting
+prom --> alert : fire alerts
+alert -right-> grafana : show in Alerting tab
+
+' Dashboards
+grafana --> prom   : query metrics (PromQL)
+grafana --> loki   : query logs (LogQL)
+
+' Log collection
+promtail --> loki  : push pod logs
+
+' Traces
+auth    --> jaeger : OTLP HTTP :4318
+identity --> jaeger
+form    --> jaeger
+promo   --> jaeger
+dash    --> jaeger
+gateway --> jaeger
+
+' User access
+actor Ops
+Ops --> grafana : port :32000\n(NodePort)
+Ops --> jaeger  : port :32686\n(NodePort)
+
+note bottom of grafana
+  Dashboard: CircleGuard Services Overview
+  - Request rate / 5xx error rate
+  - HTTP latency P50/P99
+  - JVM heap + CPU
+  - Circuit breaker state
+end note
+
+note bottom of alert
+  Alerts:
+  • CircleGuardServiceDown (CRITICAL)
+  • CircleGuardHighErrorRate (CRITICAL)
+  • CircleGuardCircuitBreakerOpen (WARNING)
+  • CircleGuardHighLatency (WARNING)
+  • CircleGuardJvmHeapHigh (WARNING)
+  • CircleGuardPodRestartLoop (WARNING)
+end note
+
+@enduml

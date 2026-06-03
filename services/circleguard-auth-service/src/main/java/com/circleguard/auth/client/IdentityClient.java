@@ -3,6 +3,7 @@ package com.circleguard.auth.client;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
@@ -28,6 +29,7 @@ public class IdentityClient {
     private final RestTemplate restTemplate;
     private final String identityBaseUrl;
 
+    @Autowired
     public IdentityClient(@Value("${IDENTITY_API_URL:http://localhost:8083}") String identityBaseUrl) {
         this(new RestTemplate(), identityBaseUrl);
     }
