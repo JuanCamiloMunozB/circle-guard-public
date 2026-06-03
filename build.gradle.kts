@@ -6,7 +6,7 @@ plugins {
     kotlin("plugin.jpa") version "1.9.24" apply false
     // Aggregates JaCoCo XML reports of every subproject and uploads them to SonarQube.
     // Triggered from Jenkins via `./gradlew sonar` inside `withSonarQubeEnv('sonarqube')`.
-    id("org.sonarqube") version "5.0.0.4638"
+    id("org.sonarqube") version "7.3.0.8198"
 }
 
 sonar {
