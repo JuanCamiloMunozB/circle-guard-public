@@ -1,82 +1,68 @@
 package com.circleguard.dashboard.integration;
 
 import com.circleguard.dashboard.client.PromotionClient;
+import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.mockserver.client.MockServerClient;
-import org.mockserver.model.HttpRequest;
-import org.mockserver.model.HttpResponse;
-import org.mockserver.model.MediaType;
-import org.testcontainers.containers.MockServerContainer;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import java.util.Map;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Integration test for the dashboard-service → promotion-service REST link.
  *
- * Spins up a real MockServer container (Testcontainers) that emulates
- * promotion-service's health-status endpoints. PromotionClient is wired
- * directly against the container URL so that the full HTTP round-trip —
- * including JSON deserialization — is exercised on real infrastructure
- * rather than with a Mockito stub of RestTemplate.
+ * Uses WireMock (in-process, no Docker) to emulate promotion-service's
+ * health-status endpoints. PromotionClient is wired directly against the
+ * WireMock server URL so that the full HTTP round-trip — including JSON
+ * deserialization — is exercised without any external infrastructure.
  *
  * Circuit-breaker fallback behaviour (AOP-dependent) is covered separately
  * by PromotionClientCircuitBreakerTest (unit test). This test focuses on
  * the happy-path contract between both services.
  *
- * Requires Docker. Tagged @Tag("integration") so it only runs under
+ * Tagged @Tag("integration") so it only runs under
  * {@code ./gradlew integrationTest}, never as part of the regular {@code test} task.
  */
-@Testcontainers
 @Tag("integration")
 class PromotionClientIntegrationTest {
 
-    private static final MockServerContainer MOCK_SERVER = new MockServerContainer(
-            DockerImageName.parse("mockserver/mockserver:5.15.0"));
-
-    private static MockServerClient mockServerClient;
+    private static WireMockServer wireMock;
     private static PromotionClient promotionClient;
 
     @BeforeAll
-    static void startContainer() {
-        MOCK_SERVER.start();
-        mockServerClient = new MockServerClient(MOCK_SERVER.getHost(), MOCK_SERVER.getServerPort());
-        // Use the public production constructor — it creates its own RestTemplate internally.
-        String baseUrl = "http://" + MOCK_SERVER.getHost() + ":" + MOCK_SERVER.getServerPort();
-        promotionClient = new PromotionClient(baseUrl);
+    static void startWireMock() {
+        wireMock = new WireMockServer(WireMockConfiguration.options().dynamicPort());
+        wireMock.start();
+        promotionClient = new PromotionClient("http://localhost:" + wireMock.port());
     }
 
     @AfterAll
-    static void stopContainer() {
-        if (MOCK_SERVER.isRunning()) {
-            MOCK_SERVER.stop();
+    static void stopWireMock() {
+        if (wireMock != null && wireMock.isRunning()) {
+            wireMock.stop();
         }
     }
 
     @BeforeEach
-    void resetExpectations() {
-        mockServerClient.reset();
+    void resetStubs() {
+        wireMock.resetAll();
     }
 
     // ── getHealthStats ────────────────────────────────────────────────────────
 
     @Test
     void getHealthStats_200response_returnsDeserializedMap() {
-        mockServerClient
-                .when(HttpRequest.request()
-                        .withMethod("GET")
-                        .withPath("/api/v1/health-status/stats"))
-                .respond(HttpResponse.response()
-                        .withStatusCode(200)
-                        .withContentType(MediaType.APPLICATION_JSON)
-                        .withBody("{\"active\":150,\"confirmed\":3,\"suspect\":8,\"probable\":2}"));
+        wireMock.stubFor(get(urlEqualTo("/api/v1/health-status/stats"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"active\":150,\"confirmed\":3,\"suspect\":8,\"probable\":2}")));
 
         Map<String, Object> result = promotionClient.getHealthStats();
 
@@ -87,14 +73,11 @@ class PromotionClientIntegrationTest {
 
     @Test
     void getHealthStats_emptyBody_returnsEmptyMap() {
-        mockServerClient
-                .when(HttpRequest.request()
-                        .withMethod("GET")
-                        .withPath("/api/v1/health-status/stats"))
-                .respond(HttpResponse.response()
-                        .withStatusCode(200)
-                        .withContentType(MediaType.APPLICATION_JSON)
-                        .withBody("{}"));
+        wireMock.stubFor(get(urlEqualTo("/api/v1/health-status/stats"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{}")));
 
         Map<String, Object> result = promotionClient.getHealthStats();
 
@@ -106,15 +89,12 @@ class PromotionClientIntegrationTest {
 
     @Test
     void getHealthStatsByDepartment_200response_returnsDeserializedMap() {
-        mockServerClient
-                .when(HttpRequest.request()
-                        .withMethod("GET")
-                        .withPath("/api/v1/health-status/stats/department/Engineering"))
-                .respond(HttpResponse.response()
-                        .withStatusCode(200)
-                        .withContentType(MediaType.APPLICATION_JSON)
+        wireMock.stubFor(get(urlEqualTo("/api/v1/health-status/stats/department/Engineering"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
                         .withBody("{\"department\":\"Engineering\",\"totalUsers\":45,"
-                                + "\"activeCount\":40,\"suspectCount\":3}"));
+                                + "\"activeCount\":40,\"suspectCount\":3}")));
 
         Map<String, Object> result = promotionClient.getHealthStatsByDepartment("Engineering");
 
@@ -126,14 +106,11 @@ class PromotionClientIntegrationTest {
 
     @Test
     void getHealthStatsByDepartment_routesCorrectDepartmentInUrl() {
-        mockServerClient
-                .when(HttpRequest.request()
-                        .withMethod("GET")
-                        .withPath("/api/v1/health-status/stats/department/Medicine"))
-                .respond(HttpResponse.response()
-                        .withStatusCode(200)
-                        .withContentType(MediaType.APPLICATION_JSON)
-                        .withBody("{\"department\":\"Medicine\",\"totalUsers\":20}"));
+        wireMock.stubFor(get(urlEqualTo("/api/v1/health-status/stats/department/Medicine"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"department\":\"Medicine\",\"totalUsers\":20}")));
 
         Map<String, Object> result = promotionClient.getHealthStatsByDepartment("Medicine");
 

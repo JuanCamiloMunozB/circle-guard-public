@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.mockserver.client.MockServerClient;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.MockServerContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -59,6 +60,10 @@ class AuthIdentityClientIntegrationTest {
     @Test
     void getAnonymousId_realHttpCall_returnsResolvedUuid() {
         UUID expected = UUID.randomUUID();
+        // Reset first so this test is isolated from any expectation left by another
+        // test method: the MockServer container is shared @BeforeAll across the class,
+        // and JUnit does not guarantee method execution order.
+        mockServerClient.reset();
         mockServerClient.when(HttpRequest.request()
                         .withMethod("POST")
                         .withPath("/api/v1/identities/map"))
@@ -74,7 +79,7 @@ class AuthIdentityClientIntegrationTest {
     }
 
     @Test
-    void getAnonymousId_identityReturns5xx_circuitBreakerFallbackToEmpty() {
+    void getAnonymousId_identityReturns5xx_surfacesAsTransportError() {
         // Reset previous expectations so this scenario hits the new rule
         mockServerClient.reset();
         mockServerClient.when(HttpRequest.request()
@@ -84,12 +89,15 @@ class AuthIdentityClientIntegrationTest {
                         .withStatusCode(500)
                         .withBody("upstream failure"));
 
-        Optional<UUID> result = identityClient.getAnonymousId("student@university.edu");
-
-        // The IdentityClient is wrapped in a Resilience4j Circuit Breaker (HU-06):
-        // when the downstream replies 5xx, the fallback MUST return Optional.empty()
-        // instead of propagating the exception to the caller.
-        assertTrue(result.isEmpty(),
-                "5xx from identity-service must degrade via Circuit Breaker fallback, not throw");
+        // This test drives a plainly-constructed IdentityClient (no Spring context), so
+        // the Resilience4j @CircuitBreaker proxy is NOT active here: a real 5xx over the
+        // wire surfaces as a RestClientException. What this integration test proves is the
+        // genuine HTTP transport + serialization + error propagation against a live
+        // container. The graceful fallback-to-empty behaviour of the Circuit Breaker
+        // (Optional.empty instead of throwing, and CLOSED->OPEN transitions) is verified
+        // separately, with a real Spring proxy, in IdentityClientCircuitBreakerTest.
+        assertThrows(RestClientException.class,
+                () -> identityClient.getAnonymousId("student@university.edu"),
+                "Without the Spring CB proxy, a 5xx must surface as a transport error");
     }
 }

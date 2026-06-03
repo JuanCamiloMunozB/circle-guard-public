@@ -1,0 +1,37 @@
+[2026-06-05 18:57:20,193] locust-baseline/INFO/locust.main: Starting Locust 2.44.1
+[2026-06-05 18:57:20,194] locust-baseline/INFO/locust.main: Run time limit set to 60 seconds
+[2026-06-05 18:57:20,195] locust-baseline/INFO/locust.runners: Ramping to 10 users at a rate of 2.00 per second
+[2026-06-05 18:57:24,200] locust-baseline/INFO/locust.runners: All users spawned: {"AdminUser": 1, "DashboardUser": 0, "FileUser": 1, "GatewayUser": 4, "StudentUser": 4} (10 total users)
+[2026-06-05 18:58:19,883] locust-baseline/INFO/locust.main: --run-time limit reached, shutting down
+[2026-06-05 18:58:19,919] locust-baseline/INFO/locust.main: Shutting down (exit code 0)
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+GET      GET /actuator/health [gateway]                                                    15     0(0.00%) |      5       3       6      6 |    0.25        0.00
+GET      GET /files/{id}                                                                    3     0(0.00%) |     11       5      22      7 |    0.05        0.00
+GET      GET /questionnaires [list]                                                         9     0(0.00%) |      6       4      10      5 |    0.15        0.00
+GET      GET /questionnaires/active                                                        20     0(0.00%) |      5       4       6      5 |    0.34        0.00
+GET      GET /surveys/pending                                                               8     0(0.00%) |      5       4       7      5 |    0.13        0.00
+POST     POST /files/upload                                                                 4     0(0.00%) |      5       4       6      5 |    0.07        0.00
+POST     POST /gate/validate                                                               64     0(0.00%) |      5       4      20      6 |    1.07        0.00
+POST     POST /surveys [healthy]                                                           76     0(0.00%) |     10       7      16     10 |    1.28        0.00
+POST     POST /surveys [symptoms]                                                          16     0(0.00%) |     10       8      15     10 |    0.27        0.00
+POST     POST /surveys/{id}/validate                                                        3     0(0.00%) |      5       5       6      5 |    0.05        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       218     0(0.00%) |      7       3      22      6 |    3.66        0.00
+
+Response time percentiles (approximated)
+Type     Name                                                                                  50%    66%    75%    80%    90%    95%    98%    99%  99.9% 99.99%   100% # reqs
+--------|--------------------------------------------------------------------------------|--------|------|------|------|------|------|------|------|------|------|------|------
+GET      GET /actuator/health [gateway]                                                          6      6      6      6      6      7      7      7      7      7      7     15
+GET      GET /files/{id}                                                                         7      7     23     23     23     23     23     23     23     23     23      3
+GET      GET /questionnaires [list]                                                              5      6      6      7     11     11     11     11     11     11     11      9
+GET      GET /questionnaires/active                                                              5      6      6      6      6      6      6      6      6      6      6     20
+GET      GET /surveys/pending                                                                    5      6      6      6      8      8      8      8      8      8      8      8
+POST     POST /files/upload                                                                      5      5      7      7      7      7      7      7      7      7      7      4
+POST     POST /gate/validate                                                                     6      6      6      6      7      7      7     21     21     21     21     64
+POST     POST /surveys [healthy]                                                                10     10     11     11     11     14     16     17     17     17     17     76
+POST     POST /surveys [symptoms]                                                               10     10     11     11     14     16     16     16     16     16     16     16
+POST     POST /surveys/{id}/validate                                                             5      5      7      7      7      7      7      7      7      7      7      3
+--------|--------------------------------------------------------------------------------|--------|------|------|------|------|------|------|------|------|------|------|------
+         Aggregated                                                                              6      9     10     10     11     13     16     17     23     23     23    218
+

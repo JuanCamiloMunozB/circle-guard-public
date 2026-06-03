@@ -2,6 +2,7 @@ package com.circleguard.dashboard.client;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
@@ -32,6 +33,7 @@ public class PromotionClient {
     private final RestTemplate restTemplate;
     private final String promotionServiceUrl;
 
+    @Autowired
     public PromotionClient(@Value("${circleguard.promotion-service.url:http://localhost:8088}") String promotionServiceUrl) {
         this(new RestTemplate(), promotionServiceUrl);
     }

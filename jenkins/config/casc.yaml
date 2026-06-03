@@ -17,6 +17,23 @@ jenkins:
   remotingSecurity:
     enabled: true
 
+  # Global env vars propagated to EVERY build on EVERY node — including external
+  # agents like local-kaniko. The K8S_API_SERVER injected from .env lives only in
+  # the controller container's process env, which is NOT visible to `env.X` when a
+  # build runs on a separate agent. Surfacing it here makes env.K8S_API_SERVER
+  # resolve on the agent; without it serverUrl is empty and kubectl falls back to
+  # its built-in default http://localhost:8080 — i.e. Jenkins itself, which returns
+  # an HTML login page ("Authentication required").
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "K8S_API_SERVER"
+            value: "${K8S_API_SERVER:-}"
+          # AKS stage cluster API server, surfaced to the local-kaniko agent the same
+          # way (the stage pipeline deploys to AKS from the local agent over the internet).
+          - key: "AKS_API_SERVER"
+            value: "${AKS_API_SERVER:-}"
+
   securityRealm:
     local:
       allowsSignup: false
@@ -76,6 +93,11 @@ credentials:
               id: "k8s-sa-token"
               description: "Kubernetes jenkins SA token. Needed only when Jenkins runs outside AKS. Leave K8S_SA_TOKEN empty for in-cluster deployments."
               secret: "${K8S_SA_TOKEN:-}"
+          - string:
+              scope: GLOBAL
+              id: "aks-sa-token"
+              description: "AKS jenkins SA token. Used by the stage pipeline to deploy to the AKS cluster from the local agent."
+              secret: "${AKS_SA_TOKEN:-}"
           - usernamePassword:
               scope: GLOBAL
               id: "dockerhub-creds"

@@ -18,6 +18,7 @@ spec:
         prometheus.io/port: "8086"
         prometheus.io/path: /actuator/prometheus
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: form-service
           image: circleguard/form-service:latest
@@ -32,6 +33,10 @@ spec:
           env:
             - name: SPRING_DATASOURCE_URL
               value: jdbc:postgresql://postgres:5432/circleguard_form
+            # Non-root `spring` user cannot write to WORKDIR /app, so the default
+            # storage root ("uploads" -> /app/uploads) fails at startup. Use /tmp.
+            - name: FORM_STORAGE_ROOT
+              value: /tmp/uploads
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness

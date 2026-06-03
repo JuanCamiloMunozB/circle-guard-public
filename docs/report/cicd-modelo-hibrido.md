@@ -1,140 +1,115 @@
 # Modelo de CI/CD híbrido — CircleGuard
 
-> Diseñado para el presupuesto de 100 USD de Azure for Students: el desarrollo diario
-> NO enciende AKS; sólo stage y prod consumen crédito y solo mientras un build corre.
+> Diseñado para el presupuesto de 100 USD de Azure for Students: el build (compilación,
+> tests, Kaniko) corre siempre en el agente local WSL2 + Docker Desktop. Solo los
+> despliegues de stage y master van a AKS, encendido manualmente y apagado tras el build.
 
 ## Resumen ejecutivo
 
-| Ambiente | Dónde corre el agente | Tooling de build | Tooling de deploy | Costo Azure por build |
+| Ambiente | Agente de build | Tooling de build | Destino de deploy | Costo Azure por build |
 |---|---|---|---|---|
-| dev    | Local (workstation, Git Bash/WSL + Docker Desktop) | Kaniko en contenedor Docker efímero (`docker run --rm gcr.io/kaniko-project/executor`) | `kubectl` local apuntando a kind o AKS-dev (sólo si ya está encendido) | 0 USD |
-| stage  | Pod efímero en AKS (kubernetes plugin de Jenkins) | Kaniko en contenedor `kaniko` del pod | `kubectl` en contenedor `kubectl` del mismo pod (RBAC: ServiceAccount `jenkins`) | ~0.06 USD/h × duración del build |
-| master | Pod efímero en AKS (idem stage) | idem stage | idem stage + aprobación manual + Release Notes | ~0.06 USD/h × duración del build |
+| dev    | Local (WSL2 + Docker Desktop), label `local-kaniko` | Kaniko en contenedor Docker efímero (`docker run --rm`) | kind local (opcional, `SKIP_DEPLOY=true` por defecto) | 0 USD |
+| stage  | Local (mismo agente `local-kaniko`) | Kaniko local | AKS `circleguard-stage` vía `aks-sa-token` + `AKS_API_SERVER` | ~0.06 USD/h × duración del build |
+| master | Local (mismo agente `local-kaniko`) | Kaniko local | AKS `circleguard-master` + aprobación manual + Release Notes | ~0.06 USD/h × duración del build |
+
+**Por qué el build no corre dentro de AKS:** la suscripción Azure for Students limita cada familia de VM amd64 a 4 vCPU. AKS necesita ese cupo para alojar la aplicación (8 servicios + infra). Correr el build en pods efímeros dentro del mismo cluster requeriría además que el controlador Jenkins sea alcanzable desde el cluster, lo que no encaja con el entorno local. El modelo elegido (build local + deploy remoto) mantiene el mismo tooling probado en dev y demuestra un despliegue real en la nube.
 
 ## Por qué Kaniko (no `docker build`)
 
-1. **Sin demonio Docker** ⇒ funciona dentro de un pod no privilegiado en AKS (no requiere `dockerd` corriendo).
-2. **Sin capas locales acumuladas** ⇒ no satura el disco del workstation.
-3. **Reproducible** ⇒ mismo binario corre en agente local y en pod AKS; la única diferencia es el wrapper (`docker run` vs invocación directa `/kaniko/executor`).
-4. **Single-platform por invocación**: aceptamos arm64-only en lugar de multi-arch porque los nodos AKS son ARM64; un solo `--customPlatform=linux/arm64` basta.
-
-## Anatomía del Pod Template
-
-Definido en `jenkins/podtemplates/kaniko-build-agent.yaml`. El kubernetes plugin lo lee vía `yamlFile` desde el repo checkeado.
-
-| Contenedor | Imagen | Para qué |
-|---|---|---|
-| `jnlp` | `jenkins/inbound-agent:latest` | Conexión inbound con el controlador. Asignado a `defaultContainer`. |
-| `gradle` | `arm64v8/gradle:8.14-jdk21-alpine` | Compilar JARs, ejecutar tests JUnit/Testcontainers. |
-| `kaniko` | `gcr.io/kaniko-project/executor:debug` | Build + push de las 8 imágenes a Docker Hub. Monta `/kaniko/.docker` desde el Secret `dockerhub-config-json`. |
-| `kubectl` | `bitnami/kubectl:latest` | `apply`, `set image`, `rollout status`, `port-forward`. Usa el token del SA `jenkins`. |
-| `python` | `arm64v8/python:3.12-alpine` | `pip install locust` y disparar el escenario de performance. |
-
-`nodeSelector: kubernetes.io/arch=arm64` evita scheduling accidental en un eventual nodepool x86.
+1. **Sin demonio Docker** — funciona dentro de WSL2 sin requerir `dockerd` con socket expuesto.
+2. **Sin capas locales acumuladas** — no satura el disco de la workstation.
+3. **Reproducible** — mismo binario en dev y en stage/master; la única diferencia es el wrapper (`docker run` vs invocación directa).
+4. **Single-platform** — `--customPlatform=linux/amd64` para que las imágenes corran en los nodos B4ms (amd64) de AKS.
 
 ## Flujo por pipeline
 
-### `Jenkinsfile.dev` (agente local)
+### `Jenkinsfile.dev` (agente local, deploy opcional a kind)
 ```
 Checkout
-  └─> Unit Tests (gradle)
-  └─> Integration Tests (gradle)
-  └─> Build JARs (gradle)
-  └─> Build & Push Images (Kaniko en `docker run --rm`) ──► Docker Hub
-  └─> Deploy to Dev      (skip si SKIP_DEPLOY=true)  ──► kind / AKS-dev (opcional)
-  └─> Wait for Rollout   (skip si SKIP_DEPLOY=true)
-  └─> Smoke Tests        (skip si SKIP_DEPLOY=true)
+  └─> Unit Tests          (gradle)
+  └─> Integration Tests   (gradle)
+  └─> SonarQube Analysis  (gradle sonar + waitForQualityGate)
+  └─> Build JARs          (gradle bootJar)
+  └─> Build & Push Images (Kaniko docker run) ──► Docker Hub :<svc>:dev-N
+  └─> Deploy to Dev       (skip si SKIP_DEPLOY=true) ──► kind local
+  └─> Wait for Rollout    (skip si SKIP_DEPLOY=true)
+  └─> Smoke Tests         (skip si SKIP_DEPLOY=true)
 post.always: cleanWs + docker system prune
 ```
 
-Por política de costos, dev NUNCA enciende AKS. Las stages Deploy/Rollout/Smoke
-existen para validar el ciclo completo cuando hay un cluster disponible (kind local,
-o AKS-dev en una sesión deliberada), pero no son justificación para encender AKS.
-
-### `Jenkinsfile.stage` (pod efímero en AKS)
+### `Jenkinsfile.stage` (agente local, deploy a AKS)
 ```
-[pod nace en circleguard-stage; serviceAccountName=jenkins]
-Checkout                                  (container default: jnlp)
-  └─> Unit Tests             container('gradle')
-  └─> Integration Tests      container('gradle')
-  └─> Build JARs             container('gradle')
-  └─> Build & Push Images    container('kaniko')   ──► Docker Hub
-  └─> Deploy to Stage        container('kubectl')
-  └─> Wait for Rollout       container('kubectl')
-  └─> E2E Tests              container('kubectl')  (port-forward + run-e2e.sh)
-  └─> Performance Baseline   container('python')   (pip install locust + run-locust.sh)
+Checkout
+  └─> Unit Tests           (gradle)
+  └─> Integration Tests    (gradle)
+  └─> SonarQube Analysis   (gradle sonar + waitForQualityGate)
+  └─> Build JARs           (gradle bootJar)
+  └─> Build & Push Images  (Kaniko docker run) ──► Docker Hub :<svc>:stage-N
+  └─> Deploy to Stage      (kubectl apply → AKS circleguard-stage)
+  └─> Wait for Rollout     (kubectl rollout status)
+  └─> E2E Tests            (port-forward + run-e2e.sh)
+  └─> OWASP ZAP Baseline   (zap-baseline.py contra stage)
+  └─> Performance Baseline (pip install locust + run-locust.sh)
 post.always: cleanWs
-[pod muere; kubectl get pods -n circleguard-stage queda vacío]
 ```
 
-### `Jenkinsfile.master` (pod efímero en AKS)
-Idéntico a stage hasta `Build & Push Images`, pero etiquetando con `v${BUILD_NUMBER}` y `latest`. Luego:
+### `Jenkinsfile.master` (agente local, deploy a AKS + aprobación)
 ```
-  └─> Approval: promote to production   (input; timeout 30 min)
-  └─> Deploy to Master                  container('kubectl')
-  └─> Wait for Rollout                  container('kubectl')
-  └─> E2E Tests                         container('kubectl')
-  └─> Performance Tests                 container('python')
-  └─> Generate Release Notes            container('gradle') (archiveArtifacts)
+Checkout
+  └─> Unit Tests           (gradle)
+  └─> Integration Tests    (gradle)
+  └─> SonarQube Analysis   (gradle sonar + waitForQualityGate)
+  └─> Build JARs           (gradle bootJar)
+  └─> Trivy Scan           (aquasec/trivy — falla en CRITICAL/HIGH sin parche)
+  └─> Build & Push Images  (Kaniko) ──► Docker Hub :<svc>:v${BUILD_NUMBER} + latest
+  └─> Semantic Version Tag (bump-and-tag.sh → git tag vMAJOR.MINOR.PATCH + push)
+  └─> Approval             (input; timeout 30 min)
+  └─> Deploy to Master     (kubectl apply → AKS circleguard-master)
+  └─> Wait for Rollout     (kubectl rollout status)
+  └─> E2E Tests            (port-forward + run-e2e.sh)
+  └─> Performance Tests    (locust)
+  └─> Generate Release Notes (script → archiveArtifacts)
+post.always: cleanWs
+post.failure: slackSend #ci-alerts + emailext a developers/culprits
+post.success: slackSend #ci-alerts
 ```
 
 ## Credenciales y secretos
 
 | Credencial Jenkins ID | Tipo | Fuente del valor | Consumida por |
 |---|---|---|---|
-| `k8s-sa-token` | StringCredential | `${K8S_SA_TOKEN}` (env del controlador) | `withKubeConfig(...)` en dev, y la cloud `aks-cg` para autenticarse al API server de AKS |
-| `dockerhub-creds` | UsernamePassword | `${DOCKERHUB_USERNAME}` / `${DOCKERHUB_TOKEN}` (env del controlador) | Reserva por si un script futuro necesita login interactivo |
-| `dockerhub-config-json` | FileCredential | archivo apuntado por `${DOCKERHUB_CONFIG_JSON_PATH}` | dev pipeline: montado en `/kaniko/.docker/config.json` dentro del contenedor Kaniko |
-| Secret K8s `dockerhub-config-json` | `kubernetes.io/dockerconfigjson` | Generado fuera del repo (ver `jenkins/README.md` §1–§2) | stage/master pipelines: montado por el pod template en `/kaniko/.docker` |
+| `aks-sa-token` | StringCredential | `${K8S_SA_TOKEN}` (env del controlador) | `withKubeConfig(...)` en stage/master para autenticarse al API server de AKS |
+| `dockerhub-creds` | UsernamePassword | `${DOCKERHUB_USERNAME}` / `${DOCKERHUB_TOKEN}` | Login a Docker Hub en el agente local |
+| `dockerhub-config-json` | FileCredential | archivo apuntado por `${DOCKERHUB_CONFIG_JSON_PATH}` | Montado en `/kaniko/.docker/config.json` dentro del contenedor Kaniko local |
+| `slack-webhook` | StringCredential | `${SLACK_WEBHOOK_TOKEN}` | `slackSend` en post.failure / post.success |
+| `smtp-credentials` | UsernamePassword | `${SMTP_USERNAME}` / `${SMTP_PASSWORD}` | `emailext` en post.failure |
 
-Ningún valor real se versiona. `casc.yaml` solo referencia placeholders `${VAR}`; las
-variables se inyectan al controlador vía `.env` (gitignored). El Secret K8s real está
-también gitignored.
+Ningún valor real se versiona. `casc.yaml` solo referencia placeholders `${VAR}`; las variables se inyectan al controlador vía `.env` (gitignored).
 
-## RBAC
+## RBAC en AKS
 
-Reusa lo existente en `jenkins/config/jenkins-account.yaml` (ServiceAccount `jenkins` +
-Role por namespace + ClusterRole acotado). El pod efímero corre
-como `jenkins`, así que su Role determina qué puede tocar `kubectl`:
+ServiceAccount `jenkins` en cada namespace con Role acotado:
 
 - Namespaces `circleguard-dev|stage|master`: pods, services, configmaps, secrets, deployments, exec, log, port-forward.
 - Cluster-level: namespaces, persistent volumes.
 
-Esto es suficiente para deploy/rollout/E2E sin elevar privilegios.
+Suficiente para deploy/rollout/E2E sin elevar privilegios.
+
+## Notificaciones
+
+| Canal | Plugin Jenkins | Trigger |
+|---|---|---|
+| Slack (`#ci-alerts`) | `slack` (Incoming Webhook), credencial `slack-webhook` | `post.failure` + `post.success` en los 3 Jenkinsfiles |
+| Email | `email-ext` + Gmail SMTP, credencial `smtp-credentials` | `post.failure` con `developers() + culprits()` |
+
+El mensaje incluye job, número de build, rama y enlace a la consola (`${env.BUILD_URL}console`).
 
 ## Costos previstos
 
 | Evento | Duración típica | Crédito consumido |
 |---|---|---|
 | Build dev (8 servicios, Kaniko local) | ~8–12 min | 0 USD (workstation) |
-| Build stage (8 servicios, Kaniko + deploy + E2E + Locust) | ~25–35 min | ~0.026–0.036 USD (1 pod ARM64 en AKS-stage encendido) |
-| Build master (igual + aprobación + Release Notes) | ~30–40 min + tiempo de aprobación | ~0.030–0.040 USD si la aprobación es rápida |
+| Build stage (tests + Sonar + Kaniko + deploy AKS + E2E + ZAP + Locust) | ~40–60 min | ~0.04–0.06 USD (AKS-stage encendido durante el build) |
+| Build master (igual + aprobación + Release Notes) | ~45–70 min + tiempo de aprobación | ~0.045–0.07 USD si la aprobación es rápida |
 
-Pre-condición: AKS-stage/master encendido **sólo durante el build**. El pipeline NO lo
-arranca: el operador (Ops) lo enciende manualmente antes del build, dispara el job, y
-ejecuta `az aks stop` después.
-
-## Notificaciones (estado actual: marcador)
-
-Los tres Jenkinsfiles tienen `post { failure { echo ... } }` con un comentario `// TODO
-Phase 8 (sec.8.6): replace with slackSend / emailext`. La conexión real (webhook Slack
-o `emailext`) se hace en HU-08 con la credencial almacenada en Jenkins; este PR sólo
-deja el punto de extensión preparado.
-
-## Verificación pendiente (Fase 5b)
-
-Esta fase deja el código listo. La verificación end-to-end con recursos reales se
-hará en sesión separada cuando estén disponibles:
-
-1. Cuenta Docker Hub `circleguard` con access token Read/Write.
-2. Crédito AKS para una sesión de ~1 h (encender stage, desplegar Jenkins en AKS o
-   conectar el controlador local con la cloud `aks-cg`, ejecutar 1 build de dev + 1
-   de stage, apagar).
-
-Los entregables de verificación de la HU son:
-
-- Build dev: log de Kaniko subiendo a `docker.io/circleguard/auth-service:dev-N` y
-  `docker images | grep circleguard` vacío tras el build.
-- Build stage: log del pod `jnlp-*` apareciendo durante el build y `kubectl get pods -n
-  circleguard-stage` vacío tras terminar.
-- `az aks show ... --query "powerState.code"` devolviendo `Stopped` al cerrar.
+Pre-condición: AKS-stage/master encendido **solo durante el build**. El pipeline no lo arranca: el operador lo enciende manualmente antes del build y ejecuta `az aks stop` después.

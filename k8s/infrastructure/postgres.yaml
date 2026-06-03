@@ -45,6 +45,13 @@ spec:
               value: password
             - name: POSTGRES_DB
               value: circleguard
+            # Initialize the data directory in a subdirectory of the mount, not at the
+            # mount root. Real CSI volumes (e.g. Azure managed disks, ext4) contain a
+            # lost+found directory at the root, and postgres initdb refuses to initialize
+            # in a non-empty directory. Local hostPath volumes (kind) have no lost+found,
+            # so this is harmless there and required on AKS.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: pgdata
               mountPath: /var/lib/postgresql/data

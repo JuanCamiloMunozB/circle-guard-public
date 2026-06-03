@@ -1,0 +1,50 @@
+# Temporary in-cluster Locust runner. Generates HTML + CSV reports against the
+# live stage services using cluster-internal DNS, then sleeps so the reports can
+# be copied out with `kubectl cp`. Delete after use:
+#   kubectl delete pod locust-runner -n circleguard-stage
+apiVersion: v1
+kind: Pod
+metadata:
+  name: locust-runner
+  namespace: circleguard-stage
+  labels:
+    app: locust-runner
+spec:
+  restartPolicy: Never
+  containers:
+    - name: locust
+      image: locustio/locust:2.32.4
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          mkdir -p /tmp/reports
+          echo "[locust] starting master run (50 users / 120s, form-service critical path)..."
+          locust -f /mnt/locust/locustfile.py --headless \
+            -u 50 -r 5 -t 120s \
+            -H http://form-service:8086 \
+            --html /tmp/reports/locust-report-master.html \
+            --csv  /tmp/reports/locust-master \
+            --exit-code-on-error 0 \
+            StudentUser AdminUser
+          echo "[locust] done. reports in /tmp/reports:"
+          ls -la /tmp/reports
+          echo "[locust] sleeping so reports can be copied out..."
+          sleep 3600
+      env:
+        - name: LOCUST_HOST
+          value: "http://form-service:8086"
+        - name: GATEWAY_HOST
+          value: "http://gateway-service:8087"
+        - name: FILE_HOST
+          value: "http://file-service:8085"
+        - name: DASHBOARD_HOST
+          value: "http://dashboard-service:8084"
+        - name: NOTIFICATION_HOST
+          value: "http://notification-service:8082"
+      volumeMounts:
+        - name: locustfile
+          mountPath: /mnt/locust
+  volumes:
+    - name: locustfile
+      configMap:
+        name: locustfile

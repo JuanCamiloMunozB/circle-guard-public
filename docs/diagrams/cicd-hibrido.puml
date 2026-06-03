@@ -17,62 +17,64 @@ skinparam component {
 }
 skinparam ArrowColor #444444
 skinparam DefaultFontName "Segoe UI"
-title CircleGuard - Pipelines Jenkins hibridos (HU-05)
+title CircleGuard - Pipelines Jenkins hibridos: build local + deploy a AKS (HU-05)
 
 actor "Dev\n(Juan Camilo)" as dev
 actor "Ops\n(Jose M.)" as ops
 
-rectangle "Workstation Windows\n(Git Bash / WSL Ubuntu)" as workstation {
-  component "Jenkins controller\n(docker-compose.jenkins.yml)\nCASC = casc.yaml" as jenkins_ctrl
-  component "Agente local\nlabel: local-kaniko\nDocker Desktop" as agent_local
-  component "Kaniko (one-shot)\ngcr.io/kaniko-project/executor\n-customPlatform=linux/arm64" as kaniko_local
-  jenkins_ctrl -down-> agent_local : asigna build dev
-  agent_local -down-> kaniko_local : docker run -rm
-}
+cloud "GitHub\nrama develop" as github
 
-cloud "Docker Hub\n(repos publicos)\ndocker.io/circleguard/*" as dockerhub
-
-cloud "Azure AKS\naks-cg-stage / aks-cg-master\nnodos ARM64\n(solo encendido para stage/prod)" as aks {
-  component "Pod efimero\n(kubernetes plugin)\nyamlFile: kaniko-build-agent.yaml" as ephemeral_pod {
-    component "container: jnlp" as c_jnlp
-    component "container: gradle\n(ARM64)" as c_gradle
-    component "container: kaniko\n+/kaniko/.docker (Secret)" as c_kaniko
-    component "container: kubectl" as c_kubectl
-    component "container: python\n(Locust)" as c_python
+rectangle "Workstation Windows\n(WSL2 Ubuntu + Docker Desktop)" as workstation {
+  component "Jenkins controller\n(docker-compose.jenkins.yml)\nJCasC = casc.yaml" as jenkins_ctrl
+  rectangle "Agente local\nlabel: local-kaniko" as agent_local {
+    component "Gradle\nunit (8 svc) + integration\n(Testcontainers)" as gradle
+    component "SonarQube / SonarCloud\nQuality Gate + Trivy" as quality
+    component "Kaniko (one-shot)\ndocker run --rm\n--customPlatform=linux/amd64" as kaniko
+    component "kubectl\nwithKubeConfig\n(aks-sa-token + AKS_API_SERVER)" as kubectl
   }
-  component "Secret\ndockerhub-config-json\n(per-namespace)" as k8s_secret
-  component "ServiceAccount\njenkins\n(RBAC acotado)" as k8s_sa
-  ephemeral_pod -right-> k8s_secret : mount /kaniko/.docker
-  ephemeral_pod -right-> k8s_sa : runs as
+  jenkins_ctrl -down-> agent_local : asigna build
+  gradle -down-> quality
+  quality -down-> kaniko : JARs
 }
 
-dev -down-> jenkins_ctrl : push -> webhook
-ops -down-> jenkins_ctrl : approve prod (input)
+cloud "Docker Hub\ndocker.io/circleguard/*\n(imagenes linux/amd64)" as dockerhub
 
-kaniko_local -right-> dockerhub : push docker.io/circleguard/<svc>:dev-N
-c_kaniko -down-> dockerhub : push docker.io/circleguard/<svc>:stage-N / vN / latest
+cloud "Azure AKS\naks-cg-stage (eastus2)\n1x Standard_B4ms (amd64)\nsolo encendido cuando se usa" as aks {
+  rectangle "ns circleguard-dev / stage / master" as ns_app {
+    component "8 microservicios\n+ infra (postgres, neo4j,\nkafka, redis, ldap)" as apps
+  }
+  rectangle "ns monitoring" as ns_obs {
+    component "Prometheus / Grafana\nLoki / Jaeger / Alertmanager" as obs
+  }
+}
 
-note bottom of workstation
-  Pipeline DEV:
-  - agent { label 'local-kaniko' }
-  - checkout -> unit -> integ -> jars -> Kaniko (push) -> Deploy/Rollout/Smoke (opcional)
-  - NO enciende AKS (Deploy/Rollout/Smoke apuntan a kind local o AKS-dev si ya esta encendido).
+dev -down-> github : git push
+github -down-> jenkins_ctrl : webhook
+ops -down-> jenkins_ctrl : approve master (input)
+
+kaniko -down-> dockerhub : push :dev-N / stage-N / vN / latest
+kubectl -down-> apps : apply + rollout + smoke
+dockerhub -right-> apps : pull imagenes
+apps -up-> obs : metrics / logs / traces
+
+note bottom of agent_local
+  DEV   : checkout -> unit -> integ -> JARs -> Kaniko (push) -> Deploy/Rollout/Smoke
+  STAGE : + E2E + OWASP ZAP + Locust (baseline 10u / 60s)
+  MASTER: + Semantic Version Tag + Approval (input) + Release Notes
+          + Locust (master 50u / 120s)
 end note
 
 note bottom of aks
-  Pipelines STAGE/MASTER:
-  - agent { kubernetes { cloud 'aks-cg'; yamlFile 'jenkins/podtemplates/kaniko-build-agent.yaml' } }
-  - Cada sh corre en container('gradle' | 'kaniko' | 'kubectl' | 'python').
-  - Pod se destruye al terminar el build (sin agentes persistentes).
-  - MASTER agrega `input` (aprobacion manual) y Release Notes.
+  El build NO ocurre en AKS (a diferencia del diseno original con Pods
+  efimeros): la cuota Azure-for-Students limita cada familia amd64 a 4 vCPU,
+  suficiente solo para la app. Se construye local y se despliega a AKS,
+  manteniendo el tooling probado del pipeline dev. Un solo nodo aloja un
+  ambiente a la vez (los NodePort son cluster-wide).
 end note
 
 note right of dockerhub
-  Solo arm64-only (la politica del
-  proyecto permite multi-arch o arm64-only;
-  Kaniko es single-platform por
-  invocacion, asi que elegimos arm64
-  para que rinda en los nodos AKS).
+  Kaniko es single-platform por invocacion;
+  elegimos linux/amd64 para casar con el nodo B4ms.
 end note
 
 @enduml

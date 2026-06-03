@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
@@ -54,13 +54,13 @@ class SurveyKafkaPublishIntegrationTest {
     @Autowired
     private EmbeddedKafkaBroker embeddedKafka;
 
-    @MockBean
+    @MockitoBean
     private com.circleguard.form.repository.HealthSurveyRepository surveyRepository;
 
-    @MockBean
+    @MockitoBean
     private com.circleguard.form.service.QuestionnaireService questionnaireService;
 
-    @MockBean
+    @MockitoBean
     private com.circleguard.form.service.SymptomMapper symptomMapper;
 
     private Consumer<String, Map<String, Object>> testConsumer;

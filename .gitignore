@@ -55,13 +55,11 @@ neo4jdata/
 .env.local
 .env.*.local
 
-# Locust outputs
-tests/performance/reports/
+# Locust outputs (generated HTML/CSV stay local; committed txt summary and baseline reports)
 tests/performance/locust-report-*.html
 tests/performance/locust-*.csv
 
-# Pipeline security scanner outputs (transient; permanent evidence lives in docs/report/security/)
-tests/security/reports/
+# Pipeline security scanner outputs committed as evidence
 
 # Runtime file-upload storage (form-service `form.storage.root` and file-service
 # `file.storage.root`, both default to `uploads/`). Created at runtime/test; never versioned.
@@ -74,6 +72,7 @@ jenkins/config/.kubeconfig-incontainer
 # Real Docker Hub registry credentials for Kaniko (never commit).
 # Only the .example template is versioned; the .yaml is built from it locally.
 k8s/jenkins/dockerhub-secret.yaml
+k8s/circleguard-secrets.yaml
 jenkins/config/.dockerconfig.json
 
 # Jenkins AKS credentials Secret (only the .example is versioned)

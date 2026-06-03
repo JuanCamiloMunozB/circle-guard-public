@@ -18,6 +18,7 @@ spec:
         prometheus.io/port: "8088"
         prometheus.io/path: /actuator/prometheus
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: promotion-service
           image: circleguard/promotion-service:latest

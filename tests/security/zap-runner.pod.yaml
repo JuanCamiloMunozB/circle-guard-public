@@ -1,0 +1,45 @@
+# Temporary in-cluster OWASP ZAP baseline runner. Scans a live CircleGuard
+# service using cluster-internal DNS, writes html/json/warnings reports to
+# /zap/wrk, then sleeps so they can be copied out with `kubectl cp`.
+# Delete after use:
+#   kubectl delete pod zap-runner -n circleguard-stage
+apiVersion: v1
+kind: Pod
+metadata:
+  name: zap-runner
+  namespace: circleguard-stage
+  labels:
+    app: zap-runner
+spec:
+  restartPolicy: Never
+  containers:
+    - name: zap
+      image: ghcr.io/zaproxy/zaproxy:stable
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          cd /zap/wrk
+          echo "[zap] starting baseline scan against form-service:8086..."
+          zap-baseline.py \
+            -t http://form-service:8086 \
+            -r zap-report.html \
+            -J zap-report.json \
+            -w zap-warnings.md \
+            -m 1 || true
+          echo "[zap] done. reports in /zap/wrk:"
+          ls -la /zap/wrk/zap-report.html /zap/wrk/zap-report.json /zap/wrk/zap-warnings.md
+          echo "[zap] sleeping so reports can be copied out..."
+          sleep 3600
+      resources:
+        requests:
+          memory: "768Mi"
+          cpu: "250m"
+        limits:
+          memory: "1536Mi"
+          cpu: "1000m"
+      volumeMounts:
+        - name: zap-wrk
+          mountPath: /zap/wrk
+  volumes:
+    - name: zap-wrk
+      emptyDir: {}

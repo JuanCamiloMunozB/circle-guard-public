@@ -5,39 +5,33 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration test for the identity-service → PostgreSQL persistence layer.
+ * Integration test for the identity-service persistence layer.
  *
- * Spins up a real PostgreSQL 16 container (Testcontainers). The full Spring
- * context boots against the container (Flyway disabled, DDL auto-create) so
- * that IdentityEncryptionConverter, IdentityVaultService and the JPA
- * repository are exercised end-to-end against a real relational database.
+ * Uses H2 (MODE=PostgreSQL) configured in src/test/resources/application.yml —
+ * no Docker required. The full Spring context boots with Flyway disabled so
+ * Hibernate generates the schema directly from entity definitions, exercising
+ * IdentityEncryptionConverter, IdentityVaultService and the JPA repository
+ * end-to-end against an in-process database.
  *
- * KafkaTemplate is mocked to isolate from the message broker; the audit-event
- * emission path is covered by the unit tests in IdentityVaultControllerTest.
+ * KafkaTemplate is mocked to isolate from the message broker.
  *
- * Requires Docker. Tagged @Tag("integration") so it only runs under
+ * Tagged @Tag("integration") so it only runs under
  * {@code ./gradlew integrationTest}, never as part of the regular {@code test} task.
  */
-@Testcontainers
 @Tag("integration")
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
-                // AES/CBC encryption requires a hex-encoded salt ≥ 8 bytes (16 hex chars).
+                // AES/CBC encryption requires a hex-encoded salt >= 8 bytes (16 hex chars).
                 "vault.secret=test-vault-password",
                 "vault.salt=deadbeefcafe00110011deadbeefcafe",
                 "vault.hash-salt=test-hash-salt",
@@ -47,29 +41,13 @@ import static org.junit.jupiter.api.Assertions.*;
                 "spring.flyway.enabled=false",
                 "spring.jpa.hibernate.ddl-auto=create-drop",
                 // Kafka connections are lazy — this placeholder prevents autoconfiguration
-                // from failing at startup. KafkaTemplate is replaced by @MockBean below.
+                // from failing at startup. KafkaTemplate is replaced by @MockitoBean below.
                 "spring.kafka.bootstrap-servers=localhost:9092"
         }
 )
 class IdentityVaultPostgresIntegrationTest {
 
-    @Container
-    static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine");
-
-    @DynamicPropertySource
-    static void postgresProps(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-        registry.add("spring.datasource.username", POSTGRES::getUsername);
-        registry.add("spring.datasource.password", POSTGRES::getPassword);
-        // The shared test application.yml pins H2 (driver + dialect) for the unit
-        // slice tests. Override both here so Hikari and Hibernate target the real
-        // PostgreSQL container instead of trying to drive a postgres URL with H2.
-        registry.add("spring.datasource.driver-class-name", POSTGRES::getDriverClassName);
-        registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
-    }
-
-    @MockBean
+    @MockitoBean
     @SuppressWarnings("unused")
     KafkaTemplate<String, Object> kafkaTemplate;
 

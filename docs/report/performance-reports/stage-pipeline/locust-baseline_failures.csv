@@ -1,3 +1,1 @@
 Method,Name,Error,Occurrences
-GET,GET /analytics/summary,CatchResponseError('Unexpected: 404'),5
-GET,GET /surveys [by user],CatchResponseError('Unexpected: 405'),13
