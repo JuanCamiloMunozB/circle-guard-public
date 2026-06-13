@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-home
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # managed-csi = Azure Disk (default StorageClass in AKS). P4 = 32 GiB ~ 1.70 USD/month.
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 32Gi

@@ -13,7 +13,12 @@ spec:
     metadata:
       labels:
         app: identity-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8083"
+        prometheus.io/path: /actuator/prometheus
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: identity-service
           image: circleguard/identity-service:latest

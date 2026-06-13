@@ -90,4 +90,38 @@ class AnalyticsServiceTest {
         assertFalse(result.isEmpty());
         assertEquals("ACTIVE", result.get(0).get("status"));
     }
+
+    // --- Unit Test: getEntryTrends masks low counts (<5) for k-anonymity ---
+    @Test
+    void getEntryTrends_lowCountRows_areMaskedForPrivacy() {
+        java.util.UUID locationId = java.util.UUID.randomUUID();
+        java.util.HashMap<String, Object> lowRow = new java.util.HashMap<>();
+        lowRow.put("hour", "2026-05-23T10:00"); lowRow.put("entry_count", 3L);
+        java.util.HashMap<String, Object> highRow = new java.util.HashMap<>();
+        highRow.put("hour", "2026-05-23T11:00"); highRow.put("entry_count", 42L);
+        when(jdbcTemplate.queryForList(anyString(), eq(locationId))).thenReturn(List.of(lowRow, highRow));
+
+        List<Map<String, Object>> result = analyticsService.getEntryTrends(locationId);
+
+        assertEquals(2, result.size());
+        assertEquals("<5", result.get(0).get("entry_count"),
+                "rows with count < 5 must be masked");
+        assertTrue(result.get(0).containsKey("note"),
+                "masked rows must carry the privacy note");
+        assertEquals(42L, result.get(1).get("entry_count"),
+                "rows with count >= 5 must NOT be touched");
+        assertFalse(result.get(1).containsKey("note"));
+    }
+
+    // --- Unit Test: getGlobalHealthStats simply re-routes to PromotionClient (sugar method) ---
+    @Test
+    void getGlobalHealthStats_routesThroughPromotionClient() {
+        Map<String, Object> expected = Map.of("totalUsers", 350);
+        when(promotionClient.getHealthStats()).thenReturn(expected);
+
+        Map<String, Object> result = analyticsService.getGlobalHealthStats();
+
+        assertEquals(expected, result);
+        verify(promotionClient).getHealthStats();
+    }
 }

@@ -1,10 +1,15 @@
+# Spring relaxed binding resolves env vars like SPRING_DATASOURCE_URL onto
+# spring.datasource.url automatically — no ${} placeholders needed below.
+# Values in this file are LOCAL-DEV DEFAULTS, intentionally non-productive.
+# In Kubernetes they are overridden by k8s/configmap.yaml + circleguard-secrets,
+# plus SPRING_DATASOURCE_URL declared as env on this service's Deployment.
 spring:
   application:
     name: circleguard-auth-service
   datasource:
     url: jdbc:postgresql://localhost:5432/circleguard_auth
     username: admin
-    password: password
+    password: dev-only-not-for-prod
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -16,15 +21,58 @@ spring:
     urls: ldap://localhost:389
     base: dc=circleguard,dc=edu
     username: cn=admin,dc=circleguard,dc=edu
-    password: admin
+    password: dev-only-ldap-not-for-prod
 
+# Non-spring custom keys: relaxed binding does NOT apply, so explicit
+# placeholders are required. Names match k8s/configmap.yaml + circleguard-secrets.
 jwt:
-  secret: "my-super-secret-dev-key-32-chars-long-12345678"
-  expiration: 3600000
+  secret: ${JWT_SECRET:dev-only-jwt-secret-do-not-use-in-prod-32chars}
+  expiration: ${JWT_EXPIRATION:3600000}
 
 qr:
-  secret: "my-qr-secret-key-for-dev-1234567890"
-  expiration: 300
+  secret: ${QR_SECRET:dev-only-qr-secret-do-not-use-in-prod-32chars}
+  expiration: ${QR_EXPIRATION:300}
+
+# Resilience4j Circuit Breaker — wraps calls to identity-service from IdentityClient.
+# Every threshold is parameterized so Ops can tune per environment without rebuilds.
+resilience4j:
+  circuitbreaker:
+    instances:
+      identityService:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: ${CB_IDENTITY_WINDOW_SIZE:10}
+        minimumNumberOfCalls: ${CB_IDENTITY_MIN_CALLS:5}
+        failureRateThreshold: ${CB_IDENTITY_FAILURE_RATE:50}
+        slowCallRateThreshold: ${CB_IDENTITY_SLOW_RATE:50}
+        slowCallDurationThreshold: ${CB_IDENTITY_SLOW_DURATION:2s}
+        permittedNumberOfCallsInHalfOpenState: ${CB_IDENTITY_HALF_OPEN_CALLS:3}
+        waitDurationInOpenState: ${CB_IDENTITY_WAIT_OPEN:10s}
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        recordExceptions:
+          - org.springframework.web.client.RestClientException
+          - java.io.IOException
+          - java.lang.IllegalStateException
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
 
 server:
   port: 8180

@@ -11,7 +11,6 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/certificates")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class CertificateValidationController {
 
     private final HealthSurveyService surveyService;

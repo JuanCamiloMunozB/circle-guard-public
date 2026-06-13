@@ -4,7 +4,7 @@ import com.circleguard.identity.service.IdentityVaultService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import java.util.UUID;
@@ -24,10 +24,10 @@ class IdentityVaultControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private IdentityVaultService vaultService;
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, Object> kafkaTemplate;
 
     @Test
@@ -77,6 +77,30 @@ class IdentityVaultControllerTest {
                 .andExpect(jsonPath("$.detail").value("Identity not found"));
 
         // Verify Kafka event was emitted even on failure
+        verify(kafkaTemplate).send(eq("audit.identity.accessed"), any());
+    }
+
+    // Covers the generic Exception catch branch (status = "ERROR") in lookupIdentity,
+    // which the NOT_FOUND test above misses because it triggers the ResponseStatusException
+    // branch first. The audit event MUST still be emitted via the finally block,
+    // even though MockMvc rethrows the unhandled RuntimeException as a ServletException.
+    @Test
+    @WithMockUser(authorities = "identity:lookup")
+    void lookupIdentity_unexpectedException_stillEmitsAuditEvent() throws Exception {
+        UUID anonymousId = UUID.randomUUID();
+        when(vaultService.resolveRealIdentity(anonymousId))
+            .thenThrow(new RuntimeException("vault offline"));
+
+        // MockMvc rethrows the controller's RuntimeException through the servlet
+        // stack as a ServletException. We swallow it on purpose — the assertion
+        // we care about is that the audit-trail emission happens in the finally
+        // block of lookupIdentity, BEFORE the exception propagates.
+        try {
+            mockMvc.perform(get("/api/v1/identities/lookup/{id}", anonymousId));
+        } catch (jakarta.servlet.ServletException expected) {
+            // expected — controller rethrows; MockMvc surfaces it
+        }
+
         verify(kafkaTemplate).send(eq("audit.identity.accessed"), any());
     }
 }

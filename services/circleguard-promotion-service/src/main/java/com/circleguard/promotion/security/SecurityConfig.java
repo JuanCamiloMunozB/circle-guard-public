@@ -28,6 +28,9 @@ public class SecurityConfig {
                 config.setAllowedHeaders(java.util.List.of("*"));
                 return config;
             }))
+            // CSRF protection is disabled because this is a stateless, token-based
+            // REST API: no server-side session or auth cookie is issued (see the
+            // STATELESS session policy below), so there is no CSRF attack surface.
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth

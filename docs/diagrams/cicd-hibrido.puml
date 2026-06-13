@@ -1,0 +1,80 @@
+@startuml CircleGuard - CI/CD hibrido (HU-05)
+
+!define AZURE_COLOR #0072C6
+skinparam backgroundColor #FAFAFA
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #555555
+  RoundCorner 10
+}
+skinparam cloud {
+  BackgroundColor #EAF4FF
+  BorderColor AZURE_COLOR
+}
+skinparam component {
+  BackgroundColor #F4F4F4
+  BorderColor #888888
+}
+skinparam ArrowColor #444444
+skinparam DefaultFontName "Segoe UI"
+title CircleGuard - Pipelines Jenkins hibridos: build local + deploy a AKS (HU-05)
+
+actor "Dev\n(Juan Camilo)" as dev
+actor "Ops\n(Jose M.)" as ops
+
+cloud "GitHub\nrama develop" as github
+
+rectangle "Workstation Windows\n(WSL2 Ubuntu + Docker Desktop)" as workstation {
+  component "Jenkins controller\n(docker-compose.jenkins.yml)\nJCasC = casc.yaml" as jenkins_ctrl
+  rectangle "Agente local\nlabel: local-kaniko" as agent_local {
+    component "Gradle\nunit (8 svc) + integration\n(Testcontainers)" as gradle
+    component "SonarQube / SonarCloud\nQuality Gate + Trivy" as quality
+    component "Kaniko (one-shot)\ndocker run --rm\n--customPlatform=linux/amd64" as kaniko
+    component "kubectl\nwithKubeConfig\n(aks-sa-token + AKS_API_SERVER)" as kubectl
+  }
+  jenkins_ctrl -down-> agent_local : asigna build
+  gradle -down-> quality
+  quality -down-> kaniko : JARs
+}
+
+cloud "Docker Hub\ndocker.io/circleguard/*\n(imagenes linux/amd64)" as dockerhub
+
+cloud "Azure AKS\naks-cg-stage (eastus2)\n1x Standard_B4ms (amd64)\nsolo encendido cuando se usa" as aks {
+  rectangle "ns circleguard-dev / stage / master" as ns_app {
+    component "8 microservicios\n+ infra (postgres, neo4j,\nkafka, redis, ldap)" as apps
+  }
+  rectangle "ns monitoring" as ns_obs {
+    component "Prometheus / Grafana\nLoki / Jaeger / Alertmanager" as obs
+  }
+}
+
+dev -down-> github : git push
+github -down-> jenkins_ctrl : webhook
+ops -down-> jenkins_ctrl : approve master (input)
+
+kaniko -down-> dockerhub : push :dev-N / stage-N / vN / latest
+kubectl -down-> apps : apply + rollout + smoke
+dockerhub -right-> apps : pull imagenes
+apps -up-> obs : metrics / logs / traces
+
+note bottom of agent_local
+  DEV   : checkout -> unit -> integ -> JARs -> Kaniko (push) -> Deploy/Rollout/Smoke
+  STAGE : + E2E + OWASP ZAP + Locust (baseline 10u / 60s)
+  MASTER: + Semantic Version Tag + Approval (input) + Release Notes
+          + Locust (master 50u / 120s)
+end note
+
+note bottom of aks
+  El build NO ocurre en AKS (a diferencia del diseno original con Pods
+  efimeros): la cuota Azure-for-Students limita cada familia amd64 a 4 vCPU,
+  suficiente solo para la app. Se construye local y se despliega a AKS,
+  manteniendo el tooling probado del pipeline dev. Un solo nodo aloja un
+  ambiente a la vez (los NodePort son cluster-wide).
+end note
+
+note right of dockerhub
+  Kaniko es single-platform por invocacion;
+  elegimos linux/amd64 para casar con el nodo B4ms.
+end note
+
+@enduml

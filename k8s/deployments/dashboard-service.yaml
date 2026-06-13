@@ -13,7 +13,12 @@ spec:
     metadata:
       labels:
         app: dashboard-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8084"
+        prometheus.io/path: /actuator/prometheus
     spec:
+      serviceAccountName: circleguard-sa
       containers:
         - name: dashboard-service
           image: circleguard/dashboard-service:latest

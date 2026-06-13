@@ -1,0 +1,141 @@
+# Ephemeral build agent for stage/master pipelines.
+#
+# Lives only for one Jenkins build, scheduled in AKS via the kubernetes plugin
+# cloud declared in jenkins/config/casc.yaml. Spawned in the namespace that the
+# pipeline targets (circleguard-stage or circleguard-master) so the in-cluster
+# jenkins ServiceAccount can deploy without a kubeconfig roundtrip.
+#
+# Image notes (AKS nodes are ARM64 - Standard_B*pls_v2 / B*ps_v2):
+#   - jenkins/inbound-agent  -> multi-arch, OK
+#   - gcr.io/kaniko-project/executor:debug -> multi-arch (linux/arm64), OK
+#   - bitnami/kubectl, python:3.12-alpine -> multi-arch, OK
+#   - The arm64v8/* tag locks the gradle image to arm64 (gradle:*-alpine is multi-arch
+#     in newer tags but the explicit prefix avoids resolution surprises in cross-arch
+#     daemons).
+#
+# Secret `dockerhub-config-json` (k8s/jenkins/dockerhub-secret.yaml.example) MUST exist
+# in the target namespace before the first build.
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins/agent-purpose: kaniko-build
+spec:
+  serviceAccountName: jenkins
+  # AKS nodes are ARM64; if mixed nodepools are added later, pin via nodeSelector.
+  nodeSelector:
+    kubernetes.io/arch: arm64
+  restartPolicy: Never
+  containers:
+    - name: jnlp
+      image: jenkins/inbound-agent:latest
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "256Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+    - name: gradle
+      image: arm64v8/gradle:8.14-jdk21-alpine
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+      volumeMounts:
+        - name: gradle-cache
+          mountPath: /home/gradle/.gradle
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:debug
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "300m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      volumeMounts:
+        - name: dockerhub-config
+          mountPath: /kaniko/.docker
+          readOnly: true
+    - name: kubectl
+      image: bitnami/kubectl:latest
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+    - name: python
+      image: arm64v8/python:3.12-alpine
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "512Mi"
+    - name: trivy
+      # Image-scanner container. Mounts the same Docker Hub config the kaniko sibling
+      # uses so trivy can authenticate when pulling the freshly-pushed images.
+      image: aquasec/trivy:latest
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      env:
+        - name: DOCKER_CONFIG
+          value: /kaniko/.docker
+      volumeMounts:
+        - name: dockerhub-config
+          mountPath: /kaniko/.docker
+          readOnly: true
+        - name: trivy-cache
+          mountPath: /root/.cache/trivy
+    - name: zap
+      # OWASP ZAP baseline scanner. Used by the stage pipeline against the gateway
+      # service exposed by NodePort. Multi-arch via ghcr.io/zaproxy/zaproxy.
+      image: ghcr.io/zaproxy/zaproxy:stable
+      command: ["sleep"]
+      args: ["infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+  volumes:
+    - name: dockerhub-config
+      secret:
+        secretName: dockerhub-config-json
+        items:
+          - key: .dockerconfigjson
+            path: config.json
+    - name: gradle-cache
+      emptyDir: {}
+    - name: trivy-cache
+      emptyDir: {}

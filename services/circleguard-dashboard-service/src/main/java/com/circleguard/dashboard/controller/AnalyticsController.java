@@ -8,7 +8,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/v1/analytics")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class AnalyticsController {
     private final AnalyticsService analyticsService;

@@ -1,3 +1,6 @@
+# Spring relaxed binding resolves env vars like SPRING_DATASOURCE_URL onto
+# spring.datasource.url automatically — no ${} placeholders needed for spring.*.
+# Local-dev defaults are intentionally non-productive.
 spring:
   application:
     name: circleguard-identity-service
@@ -7,7 +10,7 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/circleguard_identity
     username: admin
-    password: password
+    password: dev-only-not-for-prod
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -16,13 +19,36 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
+# Non-spring custom keys with explicit placeholders.
+# VAULT_HASH_SALT lives in k8s/configmap.yaml; VAULT_SECRET and VAULT_SALT are
+# pending in circleguard-secrets (flagged to Ops — see external-configuration.md §7).
 vault:
-  secret: "746573742d7365637265742d33322d63686172732d6c6f6e672d313233343536"
-  salt: "deadbeef"
-  hash-salt: "12345678"
+  secret: ${VAULT_SECRET:dev-only-vault-secret-not-for-prod-do-not-use-pls}
+  salt: ${VAULT_SALT:dev-only-salt-deadbeef}
+  hash-salt: ${VAULT_HASH_SALT:dev-only-hash-salt-12345678}
 
 jwt:
-  secret: "my-super-secret-dev-key-32-chars-long-12345678"
+  secret: ${JWT_SECRET:dev-only-jwt-secret-do-not-use-in-prod-32chars}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
 
 server:
   port: 8083

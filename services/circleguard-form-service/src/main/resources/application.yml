@@ -1,10 +1,13 @@
+# Spring relaxed binding resolves env vars (e.g. SPRING_DATASOURCE_URL,
+# SPRING_KAFKA_BOOTSTRAP_SERVERS) onto the corresponding properties.
+# Local-dev defaults are intentionally non-productive.
 spring:
   application:
     name: circleguard-form-service
   datasource:
     url: jdbc:postgresql://localhost:5432/circleguard_form
     username: admin
-    password: password
+    password: dev-only-not-for-prod
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -17,6 +20,26 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
 
 server:
   port: 8086

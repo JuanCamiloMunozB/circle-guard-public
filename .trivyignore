@@ -1,0 +1,22 @@
+# Trivy CVE suppression file.
+#
+# Each line is one CVE id. Trivy excludes these from the report, so they will NOT
+# fail the build. Use sparingly and ALWAYS document why a CVE is suppressed.
+#
+# Format:
+#   CVE-YYYY-NNNNN  # Reason for suppression. Expiration: YYYY-MM-DD.
+#
+# Example:
+#   CVE-2024-12345  # False positive in eclipse-temurin alpine layer. Re-evaluate 2026-12-01.
+#
+# Anything CRITICAL/HIGH that Trivy finds is blocking by default unless listed below.
+
+# (No active suppressions.)
+#
+# CVE-2026-22732 (spring-security-web bypass) was previously suppressed while the
+# project was pinned to Spring Boot 3.4.x (spring-security 6.4.13, unpatched). The
+# bump to Spring Boot 3.5.14 ships spring-security-web 6.5.10 (>= the 6.5.9 fix), so
+# the vulnerability is resolved at the source and the suppression has been removed.
+# A clean-room Trivy image scan (--severity CRITICAL,HIGH --ignore-unfixed, NO
+# ignorefile) of the 3.5.14 bootJar reports 0 findings, confirming nothing else
+# needs suppressing.

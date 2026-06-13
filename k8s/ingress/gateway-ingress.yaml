@@ -1,0 +1,29 @@
+# Ingress with TLS for gateway-service (campus entry validation).
+# Apply per namespace after nginx-ingress and cert-manager are installed:
+#   kubectl apply -f k8s/ingress/gateway-ingress.yaml -n circleguard-dev
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: circleguard-ca-issuer
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - gateway.circleguard.local
+      secretName: gateway-tls
+  rules:
+    - host: gateway.circleguard.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway-service
+                port:
+                  number: 8087

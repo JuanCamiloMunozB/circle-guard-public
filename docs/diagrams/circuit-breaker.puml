@@ -1,0 +1,47 @@
+@startuml circuit-breaker
+title Resilience4j Circuit Breaker — state machine en CircleGuard\n(IdentityClient → identity-service, PromotionClient → promotion-service)
+
+skinparam state {
+  BackgroundColor<<closed>>    #C8E6C9
+  BackgroundColor<<open>>      #FFCDD2
+  BackgroundColor<<halfopen>>  #FFE0B2
+  BorderColor                  #424242
+  FontStyle                    bold
+}
+
+[*] --> CLOSED
+
+state "CLOSED\n(las llamadas pasan al downstream)" as CLOSED <<closed>>
+state "OPEN\n(toda llamada va al fallback —\nel downstream NO se invoca)" as OPEN <<open>>
+state "HALF_OPEN\n(se admiten N llamadas de prueba)" as HALF_OPEN <<halfopen>>
+
+CLOSED  --> OPEN      : tasa de fallos (o slow-calls)\n>= failureRateThreshold\nsobre slidingWindowSize llamadas
+OPEN    --> HALF_OPEN : transcurre waitDurationInOpenState
+HALF_OPEN --> CLOSED  : permittedNumberOfCalls\nsuperadas exitosamente
+HALF_OPEN --> OPEN    : alguna llamada de prueba falla
+
+note right of CLOSED
+  Cada llamada al servicio downstream:
+   - éxito → registra success
+   - excepción registrada (RestClientException, IOException) → registra failure
+   - latencia > slowCallDurationThreshold → registra slow-call
+  Cuando se acumulan >= minimumNumberOfCalls
+  se evalúa failureRate y slowCallRate.
+end note
+
+note right of OPEN
+  En OPEN, Resilience4j NO ejecuta el método anotado:
+  invoca directamente el método de fallback declarado en
+  @CircuitBreaker(fallbackMethod = "...").
+
+  Beneficio: el downstream se recupera sin recibir tráfico
+  que ya sabemos que va a fallar (anti cascading-failure).
+end note
+
+note left of HALF_OPEN
+  Sondeo controlado: si el downstream volvió,
+  la mayoría de las llamadas de prueba pasarán
+  y el breaker cerrará. Si sigue caído, vuelve a OPEN.
+end note
+
+@enduml

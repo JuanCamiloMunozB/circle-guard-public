@@ -1,10 +1,12 @@
+# Spring relaxed binding resolves env vars (e.g. SPRING_DATASOURCE_URL) onto
+# spring.datasource.url automatically — no ${} placeholders needed for spring.*.
 spring:
   application:
     name: circleguard-dashboard-service
   datasource:
     url: jdbc:postgresql://localhost:5432/circleguard_dashboard
     username: admin
-    password: password
+    password: dev-only-not-for-prod
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -12,6 +14,46 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
+
+# Resilience4j Circuit Breaker — wraps calls to promotion-service from PromotionClient.
+# Every threshold is parameterized so Ops can tune per environment without rebuilds.
+resilience4j:
+  circuitbreaker:
+    instances:
+      promotionService:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: ${CB_PROMOTION_WINDOW_SIZE:10}
+        minimumNumberOfCalls: ${CB_PROMOTION_MIN_CALLS:5}
+        failureRateThreshold: ${CB_PROMOTION_FAILURE_RATE:50}
+        slowCallRateThreshold: ${CB_PROMOTION_SLOW_RATE:50}
+        slowCallDurationThreshold: ${CB_PROMOTION_SLOW_DURATION:2s}
+        permittedNumberOfCallsInHalfOpenState: ${CB_PROMOTION_HALF_OPEN_CALLS:3}
+        waitDurationInOpenState: ${CB_PROMOTION_WAIT_OPEN:10s}
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        recordExceptions:
+          - org.springframework.web.client.RestClientException
+          - java.io.IOException
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
 
 server:
   port: 8084

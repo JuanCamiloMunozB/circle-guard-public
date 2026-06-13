@@ -23,6 +23,8 @@ spring:
     consumer:
       group-id: promotion-service-group
       auto-offset-reset: earliest
+    listener:
+      auto-startup: false
   data:
     redis:
       host: localhost

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file-service
+  labels:
+    app: file-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: file-service
+  template:
+    metadata:
+      labels:
+        app: file-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8085"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      serviceAccountName: circleguard-sa
+      containers:
+        - name: file-service
+          image: circleguard/file-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8085
+          envFrom:
+            - configMapRef:
+                name: circleguard-config
+            - secretRef:
+                name: circleguard-secrets
+          env:
+            # The image runs as the non-root `spring` user with WORKDIR /app, which
+            # it cannot write to. The default storage root ("uploads") resolves to
+            # /app/uploads and fails with AccessDeniedException at startup. Point it
+            # at /tmp (world-writable) so FileStorageService can create the directory.
+            - name: FILE_STORAGE_ROOT
+              value: /tmp/uploads
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8085
+            initialDelaySeconds: 45
+            periodSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8085
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 5
